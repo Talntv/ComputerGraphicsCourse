@@ -2,7 +2,10 @@ import time
 import numpy as np
 import cv2
 import argparse
+from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
+from scipy.linalg import cholesky
+
 import igraph as ig
 
 GC_BGD = 0 # Hard bg pixel
@@ -122,13 +125,71 @@ def grabcut(img, rect, n_iter=5):
 def initalize_GMMs(img, mask, n_components=5):
     bg_pixels = img[np.logical_or(mask == GC_BGD, mask == GC_PR_BGD)]
     fg_pixels = img[np.logical_or(mask == GC_PR_FGD, mask == GC_FGD)]    
-
-    bgGMM = GaussianMixture(n_components=n_components, covariance_type='full', init_params='kmeans')
-    bgGMM.fit(bg_pixels)
-    fgGMM = GaussianMixture(n_components=n_components, covariance_type='full', init_params='kmeans')
-    fgGMM.fit(fg_pixels)
-    # TODO: use bgGMM.set_params() to update instead of 'fit'
-
+    
+    # bgGMM = GaussianMixture(n_components=n_components, covariance_type='full', init_params='kmeans')
+    # bgGMM.fit(bg_pixels)
+    # fgGMM = GaussianMixture(n_components=n_components, covariance_type='full', init_params='kmeans')
+    # fgGMM.fit(fg_pixels)
+    
+    
+    # Manually initialize bgGMM
+    kmeans = KMeans(n_clusters=n_components)
+    kmeans.fit(bg_pixels)
+    means_init = kmeans.cluster_centers_
+    covariances_init = np.zeros((n_components, img.shape[-1], img.shape[-1]))
+    for i in range(n_components):
+        covariances_init[i] = 0.01 * np.eye(img.shape[-1])
+    weights_init = np.zeros(n_components)
+    for i in range(n_components):
+        weights_init[i] = np.sum(kmeans.labels_ == i) / len(bg_pixels)
+    for i in range(n_components):
+        indices = np.where(kmeans.labels_ == i)[0]
+        if indices.size > 0:
+            X = bg_pixels[indices]
+            N = len(indices)
+            mean = means_init[i]
+            covariance = (1 / N) * np.dot((X - mean).T, (X - mean))
+            covariances_init[i] = covariance
+    bgGMM = GaussianMixture(n_components=n_components, covariance_type='full')
+    bgGMM.means_ = means_init
+    bgGMM.covariances_ = covariances_init
+    bgGMM.weights_ = weights_init   
+    bg_precisions = np.zeros((n_components, img.shape[-1], img.shape[-1]))
+    for i in range(n_components):
+        bg_precisions[i] = np.linalg.inv(bgGMM.covariances_[i])
+    bgGMM.precisions_cholesky_ = np.zeros((n_components, img.shape[-1], img.shape[-1]))
+    for i in range(n_components):
+        bgGMM.precisions_cholesky_[i] = cholesky(bg_precisions[i], lower=True)
+    
+    # Manually initialize fgGMM
+    kmeans = KMeans(n_clusters=n_components)
+    kmeans.fit(fg_pixels)
+    means_init = kmeans.cluster_centers_
+    covariances_init = np.zeros((n_components, img.shape[-1], img.shape[-1]))
+    for i in range(n_components):
+        covariances_init[i] = 0.01 * np.eye(img.shape[-1])
+    weights_init = np.zeros(n_components)
+    for i in range(n_components):
+        weights_init[i] = np.sum(kmeans.labels_ == i) / len(fg_pixels)
+    for i in range(n_components):
+        indices = np.where(kmeans.labels_ == i)[0]
+        if indices.size > 0:
+            X = fg_pixels[indices]
+            N = len(indices)
+            mean = means_init[i]
+            covariance = (1 / N) * np.dot((X - mean).T, (X - mean))
+            covariances_init[i] = covariance
+    fgGMM = GaussianMixture(n_components=n_components, covariance_type='full')
+    fgGMM.means_ = means_init
+    fgGMM.covariances_ = covariances_init
+    fgGMM.weights_ = weights_init   
+    fg_precisions = np.zeros((n_components, img.shape[-1], img.shape[-1]))
+    for i in range(n_components):
+        fg_precisions[i] = np.linalg.inv(fgGMM.covariances_[i])
+    fgGMM.precisions_cholesky_ = np.zeros((n_components, img.shape[-1], img.shape[-1]))
+    for i in range(n_components):
+        fgGMM.precisions_cholesky_[i] = cholesky(fg_precisions[i], lower=True)
+        
     global flat_img
     flat_img = np.float32(img).reshape(-1,3)
 
@@ -142,62 +203,61 @@ def initalize_GMMs(img, mask, n_components=5):
 
 @timing_val
 def update_GMMs(img, mask, bgGMM : GaussianMixture, fgGMM: GaussianMixture):
-    # # Reshape img and mask to 2D arrays
-    # img_2d = img.reshape((-1, img.shape[-1]))
-    # mask_2d = mask.ravel()
+    # Reshape img and mask to 2D arrays
+    img_2d = img.reshape((-1, img.shape[-1]))
+    mask_2d = mask.ravel()
 
-    # # Compute the likelihoods of each pixel belonging to each Gaussian component in the background and foreground GMMs
-    # bg_likelihoods = bgGMM.predict_proba(img_2d)
-    # fg_likelihoods = fgGMM.predict_proba(img_2d)
-    # mask_2d = mask_2d.reshape(bg_likelihoods.shape[0], -1)
+    # Compute the likelihoods of each pixel belonging to each Gaussian component in the background and foreground GMMs
+    bg_likelihoods = bgGMM.predict_proba(img_2d)
+    fg_likelihoods = fgGMM.predict_proba(img_2d)
+    mask_2d = mask_2d.reshape(bg_likelihoods.shape[0], -1)
 
-    # # Compute the responsibilities of each pixel for each Gaussian component in the background and foreground GMMs
-    # bg_responsibilities = (1 - mask_2d) * bg_likelihoods
-    # fg_responsibilities = mask_2d * fg_likelihoods
+    # Compute the responsibilities of each pixel for each Gaussian component in the background and foreground GMMs
+    bg_responsibilities = (1 - mask_2d) * bg_likelihoods
+    fg_responsibilities = mask_2d * fg_likelihoods
 
-    # # Normalize the responsibilities
-    # total_responsibilities = bg_responsibilities + fg_responsibilities
-    # bg_responsibilities /= total_responsibilities
-    # fg_responsibilities /= total_responsibilities
+    # Normalize the responsibilities
+    total_responsibilities = bg_responsibilities + fg_responsibilities
+    bg_responsibilities /= total_responsibilities
+    fg_responsibilities /= total_responsibilities
 
-    # # Compute the total responsibilities for each Gaussian component
-    # bg_total_responsibilities = np.sum(bg_responsibilities, axis=0)
-    # fg_total_responsibilities = np.sum(fg_responsibilities, axis=0)
+    # Compute the total responsibilities for each Gaussian component
+    bg_total_responsibilities = np.sum(bg_responsibilities, axis=0)
+    fg_total_responsibilities = np.sum(fg_responsibilities, axis=0)
 
-    # # Update the means, covariances, determinants, and mixing weights of each Gaussian component
-    # for i in range(bgGMM.n_components):
-    #     # Compute the new mean and covariance for the background GMM
-    #     indices = np.where(bg_responsibilities[:, i] > 0)[0]
-    #     if indices.size > 0:
-    #         bgGMM.means_[i] = np.mean(img_2d[indices], axis=0)
-    #         bgGMM.covariances_[i] = np.cov(img_2d[indices], rowvar=False, bias=True) * ((len(img_2d[indices]) -1) / len(img_2d[indices]))
-    #         bgGMM.weights_[i] = bg_total_responsibilities[i] / img_2d.shape[0]
+    # Update the means, covariances, determinants, and mixing weights of each Gaussian component
+    for i in range(bgGMM.n_components):
+        # Compute the new mean and covariance for the background GMM
+        indices = np.where(bg_responsibilities[:, i] > 0)[0]
+        if indices.size > 0:
+            bgGMM.means_[i] = np.mean(img_2d[indices], axis=0)
+            bgGMM.covariances_[i] = np.cov(img_2d[indices], rowvar=False, bias=True) * ((len(img_2d[indices]) -1) / len(img_2d[indices]))
+            bgGMM.weights_[i] = bg_total_responsibilities[i] / img_2d.shape[0]
     
-    # print(f'fgGMM covs before update: {fgGMM.covariances_}')
-    # for i in range(fgGMM.n_components):
-    #     # Compute the new mean and covariance for the foreground GMM
-    #     indices = np.where(fg_responsibilities[:, i] > 0)[0]
-    #     if indices.size > 0:
-    #         fgGMM.means_[i] = np.mean(img_2d[indices], axis=0)
-    #         fgGMM.covariances_[i] = np.cov(img_2d[indices], rowvar=False, bias=True)
-    #         fgGMM.weights_[i] = fg_total_responsibilities[i] / img_2d.shape[0]
-    # print(f'\nfgGMM covs after update: {fgGMM.covariances_}')
-
-    # return bgGMM, fgGMM
-
-    bgPixels = np.where(np.logical_or(mask == GC_PR_BGD, mask == GC_BGD))
-    fgPixels = np.where(np.logical_or(mask == GC_PR_FGD, mask == GC_FGD))
     print(f'fgGMM covs before update: {fgGMM.covariances_}')
-
-    bgSamples = img[bgPixels]
-    fgSamples = img[fgPixels]
-    bgGMM.fit(bgSamples)
-    fgGMM.fit(fgSamples)
-    print(f'fgGMM covs after update: {fgGMM.covariances_}')
-
-    # TODO: use bgGMM.set_params() to update instead of 'fit'
+    for i in range(fgGMM.n_components):
+        # Compute the new mean and covariance for the foreground GMM
+        indices = np.where(fg_responsibilities[:, i] > 0)[0]
+        if indices.size > 0:
+            fgGMM.means_[i] = np.mean(img_2d[indices], axis=0)
+            fgGMM.covariances_[i] = np.cov(img_2d[indices], rowvar=False, bias=False, ddof=1)
+            fgGMM.weights_[i] = fg_total_responsibilities[i] / img_2d.shape[0]
+    print(f'\nfgGMM covs after update: {fgGMM.covariances_}')
 
     return bgGMM, fgGMM
+    
+    # bgPixels = np.where(np.logical_or(mask == GC_PR_BGD, mask == GC_BGD))
+    # fgPixels = np.where(np.logical_or(mask == GC_PR_FGD, mask == GC_FGD))
+    # print(f'fgGMM covs before update: {fgGMM.covariances_}')
+
+    # bgSamples = img[bgPixels]
+    # fgSamples = img[fgPixels]
+    
+    # bgGMM.fit(bgSamples)
+    # fgGMM.fit(fgSamples)
+    # print(f'fgGMM covs after update: {fgGMM.covariances_}')
+
+    # return bgGMM, fgGMM
 
 @timing_val
 def calculate_mincut(img, mask, bgGMM, fgGMM):
@@ -238,9 +298,15 @@ def check_convergence(energy):
 
 @timing_val
 def cal_metric(predicted_mask, gt_mask):
-    # TODO: implement metric calculation
+    correct_pixels = np.sum(mask == gt_mask)
+    total_pixels = mask.shape[0] * mask.shape[1]
+    accuracy = correct_pixels / total_pixels
 
-    return 100, 100
+    intersection = np.sum(mask & gt_mask)
+    union = np.sum(mask | gt_mask)
+    jaccard_similarity = intersection / union
+
+    return accuracy, jaccard_similarity
 
 def parse():
     parser = argparse.ArgumentParser()
