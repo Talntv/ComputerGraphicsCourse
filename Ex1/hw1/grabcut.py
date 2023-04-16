@@ -69,9 +69,8 @@ def get_T_links_capacities(mask, bgGMM, fgGMM):
     K = max(n_sums)
     source_capacities = np.where((mask == GC_FGD), K, 0)
     target_capacities = np.where(mask == GC_BGD, K, 0)
-    bgDn = np.apply_along_axis(lambda x: calculate_Dn(bgGMM, x), axis=1, arr=flat_img[(mask != GC_BGD) & (mask != GC_FGD)])
-    fgDn = np.apply_along_axis(lambda x: calculate_Dn(fgGMM, x), axis=1, arr=flat_img[(mask != GC_BGD) & (mask != GC_FGD)])
-    print(f'source {len(source_capacities)} and target {len(target_capacities)}')
+    bgDn = calculate_Dn(bgGMM, flat_img[(mask != GC_BGD) & (mask != GC_FGD)])
+    fgDn = calculate_Dn(fgGMM, flat_img[(mask != GC_BGD) & (mask != GC_FGD)])
     
     source_capacities[(mask != GC_BGD) & (mask != GC_FGD)] = bgDn
     target_capacities[(mask != GC_BGD) & (mask != GC_FGD)] = fgDn
@@ -85,7 +84,9 @@ def calculate_Dn(GMM : GaussianMixture, z):
         mean = GMM.means_[i]
         covariance_matrix = GMM.covariances_[i]
         det = np.linalg.det(covariance_matrix)
-        pdf = (pi / np.sqrt(det)) * np.exp(-0.5 * np.dot(np.dot((z - mean).T, np.linalg.inv(covariance_matrix)), (z - mean)))
+        distance_from_mean = (z - mean)
+        inner = np.einsum('ij,ij->i', distance_from_mean, np.dot(np.linalg.inv(GMM.covariances_[i]), distance_from_mean.T).T)
+        pdf = (pi / np.sqrt(det)) * np.exp(-0.5 * inner)
         d += pdf
     return -1 * np.log(d)
 
@@ -138,7 +139,7 @@ def grabcut(img, rect, n_iter=5):
 
     bgGMM, fgGMM = initalize_GMMs(img, mask)
 
-    num_iters = 6
+    num_iters = 20
     for i in range(num_iters):
         #Update GMM
         bgGMM, fgGMM = update_GMMs(img, mask, bgGMM, fgGMM)
@@ -206,12 +207,6 @@ def update_mask(mincut_sets, mask: np.ndarray):
     pr_indexes = np.where(np.logical_or(mask == GC_PR_BGD, mask == GC_PR_FGD))
     img_indexes = np.arange(rows * columns, dtype=np.uint32).reshape(rows, columns)
     mask[pr_indexes] = np.where(np.isin(img_indexes[pr_indexes], fg_v), GC_PR_FGD, GC_PR_BGD)
-
-    l = mask.copy()
-    l[l == 2] = 0
-    l = cv2.threshold(l, 0, 1, cv2.THRESH_BINARY)[1]
-    cv2.imshow('GrabCut Mask', 255 * l)
-
     return mask
 
 @timing_val
