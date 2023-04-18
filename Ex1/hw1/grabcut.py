@@ -22,7 +22,7 @@ def timing_val(func):
         return res
     return wrapper
 
-flat_img = np.float32()
+flat_img = np.float64()
 n_link_capacities = []
 num_of_pixels = -1
 n_sums = []
@@ -126,6 +126,7 @@ def initGMM(GMM : GaussianMixture, img, pixels):
 @timing_val
 def grabcut(img, rect, n_iter=5):
     # Assign initial labels to the pixels based on the bounding box
+    img = np.asarray(img, dtype=np.float64)
     mask = np.zeros(img.shape[:2], dtype=np.uint8)
     mask.fill(GC_BGD)
     x, y, w, h = rect
@@ -135,11 +136,11 @@ def grabcut(img, rect, n_iter=5):
 
     #Initalize the inner square to Foreground
     mask[y:y+h, x:x+w] = GC_PR_FGD
-    # mask[rect[1]+rect[3]//2, rect[0]+rect[2]//2] = GC_FGD
+    mask[rect[1]+rect[3]//2, rect[0]+rect[2]//2] = GC_FGD
 
     bgGMM, fgGMM = initalize_GMMs(img, mask)
 
-    num_iters = 20
+    num_iters = 5
     for i in range(num_iters):
         #Update GMM
         bgGMM, fgGMM = update_GMMs(img, mask, bgGMM, fgGMM)
@@ -184,16 +185,11 @@ def calculate_mincut(img, mask, bgGMM, fgGMM):
     g = ig.Graph(num_of_pixels + 2)
     source, target = num_of_pixels, num_of_pixels + 1
     print('initializied graph')
-    neighbor_edges = []
-    for pixel in neighbors_of_each_pixel:
-        for neighbor in neighbors_of_each_pixel[pixel]:
-            neighbor_edges.append((pixel, neighbor))
+    neighbor_edges = [(pixel, neighbor) for pixel in neighbors_of_each_pixel for neighbor in neighbors_of_each_pixel[pixel]]
 
-    source_edges = [(source, i) for i in range(num_of_pixels)]
-    target_edges = [(i, target) for i in range(num_of_pixels)]
-    e = source_edges + target_edges + neighbor_edges
-
-    g.add_edges(e)
+    source_edges = np.column_stack((np.full(num_of_pixels, source), np.arange(num_of_pixels)))
+    target_edges = np.column_stack((np.arange(num_of_pixels), np.full(num_of_pixels, target)))
+    g.add_edges(np.concatenate((source_edges, target_edges)).tolist() + neighbor_edges)
     min_cut = g.st_mincut(source, target, capacities)
     energy = min_cut.value
     print(f'energy is {energy}')
