@@ -57,12 +57,13 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
         nearby_border = []
         neighbors = [(i-1,j), (i+1,j), (i,j-1), (i,j+1)]
         for row, col in neighbors:
+            # Exclude out of boundaries neighbors, get border neighbors
             if (0 <= row < original_mask.shape[0] and
                 0 <= col < original_mask.shape[1] and
                 not original_mask[row, col]):
                 nearby_border.append(n*row + col)
         if original_mask[i][j] == 0:
-            # Border pixels in the FG
+            # BG pixels
             A.rows[pixel] = [pixel]
             A.data[pixel] = [1]
         elif nearby_border:
@@ -77,7 +78,8 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
                 # Here we update A and B as we go instead of removing outer border pixels from A
                 # A.data[pixel][idx] = -1
                 # for i in range(3):
-                #     Bs[i][zero_pixel] = flat_tgt[zero_pixel][i]
+                #     Bs[i][border] = flat_tgt[border][i]
+            # This would make the inner border pixels to take the tgt_img colors
             im_mask[i][j] = 0
     # Compress A for improved performance
     A = A.tocsc()
@@ -90,14 +92,14 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
 def parse(imgname, bgname):
     parser = argparse.ArgumentParser()
     parser.add_argument('--src_path', type=str, default=f'./data/imgs/{imgname}.jpg', help='image file path')
-    parser.add_argument('--mask_path', type=str, default=f'./{imgname}_our_mask.bmp', help='mask file path')
-    parser.add_argument('--tgt_path', type=str, default=f'./data/bg/{bgname}.jpg', help='mask file path')
+    parser.add_argument('--mask_path', type=str, default=f'./data/seg_GT/{imgname}.bmp', help='mask file path')
+    parser.add_argument('--tgt_path', type=str, default=f'./data/bg/{bgname}.jpeg', help='mask file path')
     return parser.parse_args()
 
 if __name__ == "__main__":
     # Load the source and target images
-    imgname = 'teddy'
-    bgname = 'wall'
+    imgname = 'llama'
+    bgname = 'grass_mountains'
     args = parse(imgname, bgname)
 
     im_tgt = cv2.imread(args.tgt_path, cv2.IMREAD_COLOR)
