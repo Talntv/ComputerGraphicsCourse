@@ -4,7 +4,6 @@ import cv2
 import argparse
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
-from scipy.linalg import cholesky
 
 import igraph as ig
 
@@ -14,7 +13,7 @@ GC_PR_BGD = 2 # Soft bg pixel
 GC_PR_FGD = 3 # Soft fg pixel
 
 # Global variables
-flat_img = np.float64()
+flat_img = np.float32()
 n_link_capacities = []
 n_sums = []
 neighbors_of_each_pixel = {}
@@ -22,6 +21,16 @@ k = -1
 num_of_pixels = -1
 convergence = -1
 latest_energy = -1
+
+import time
+def timing_val(func):
+    def wrapper(*arg, **kw):
+        t1 = time.time()
+        res = func(*arg, **kw)
+        t2 = time.time()
+        print(f'{func.__name__} took {(t2 - t1)}')
+        return res
+    return wrapper
 
 def calculate_beta(neighbors_of_each_pixel: dict, total_number_of_neighbors):
     sum_dist = 0
@@ -31,6 +40,7 @@ def calculate_beta(neighbors_of_each_pixel: dict, total_number_of_neighbors):
         sum_dist += np.sum(dist * dist)
     return 1 / (2 * sum_dist / total_number_of_neighbors)
 
+@timing_val
 def get_N_links_capacities(img):
     global n_link_capacities
     global neighbors_of_each_pixel
@@ -46,7 +56,7 @@ def get_N_links_capacities(img):
     global n_sums
     n_sums = np.zeros(flat_img.shape[0])
     for pixel, neighbors in enumerate(neighbors_of_each_pixel.values()):
-        delta_new = (flat_img[pixel] - flat_img[neighbors]).astype(np.float64)
+        delta_new = (flat_img[pixel] - flat_img[neighbors])
         N_new = (50 / (np.linalg.norm(pixel - np.array(neighbors).reshape(1,len(neighbors)), axis=0)) * np.exp(-beta * np.diag(delta_new.dot(delta_new.T))))
         n_link_capacities.extend(N_new)
         n_sums[pixel] += np.sum(N_new)
@@ -104,12 +114,10 @@ def initGMM(GMM : GaussianMixture, img, pixels):
             precisions[i] = GMM.covariances_[i] + np.eye(3) * 0.001
         else:
             precisions[i] = np.linalg.inv(GMM.covariances_[i])
-    GMM.precisions_cholesky_ = np.zeros((n_components, img.shape[-1], img.shape[-1]))
-    for i in range(n_components):
-        GMM.precisions_cholesky_[i] = cholesky(precisions[i], lower=True)
 
 # Define the GrabCut algorithm function
-def grabcut(img, rect, n_iter=3):
+@timing_val
+def grabcut(img, rect, n_iter=5):
     # Assign initial labels to the pixels based on the bounding box
     img = np.asarray(img, dtype=np.float64)
     mask = np.zeros(img.shape[:2], dtype=np.uint8)
@@ -123,12 +131,15 @@ def grabcut(img, rect, n_iter=3):
     mask[rect[1]+rect[3]//2, rect[0]+rect[2]//2] = GC_FGD
     bgGMM, fgGMM = initialize_GMMs(img)
     for i in range(n_iter):
+        print(f' Performing the {i+1}th iteration')
         #Update GMM
         bgGMM, fgGMM = update_GMMs(img, mask, bgGMM, fgGMM)
         mincut_sets, energy = calculate_mincut(img, mask, bgGMM, fgGMM)
         mask = update_mask(mincut_sets, mask)
         if check_convergence(energy):
             break
+
+    print(f'finished after {i+1} iterations')
 
     # Return the final mask and the GMMs
     return mask, bgGMM, fgGMM
@@ -175,7 +186,7 @@ def update_mask(mincut_sets, mask: np.ndarray):
 
 def check_convergence(energy):
     global latest_energy
-    converged = True if np.abs(latest_energy - energy) < 1000 else False 
+    converged = True if np.abs(latest_energy - energy) < 800 else False 
     latest_energy = energy
     return converged
 
@@ -190,9 +201,9 @@ def cal_metric(predicted_mask, gt_mask):
 
     return accuracy, jaccard_similarity
 
-def parse():
+def parse(imgname):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_name', type=str, default='book', help='name of image from the course files')
+    parser.add_argument('--input_name', type=str, default=imgname, help='name of image from the course files')
     parser.add_argument('--eval', type=int, default=1, help='calculate the metrics')
     parser.add_argument('--input_img_path', type=str, default='', help='if you wish to use your own img_path')
     parser.add_argument('--use_file_rect', type=int, default=1, help='Read rect from course files')
@@ -201,7 +212,8 @@ def parse():
 
 if __name__ == '__main__':
     # Load an example image and define a bounding box around the object of interest
-    args = parse()
+    imgname = 'teddy'
+    args = parse(imgname)
 
     if args.input_img_path == '':
         input_path = f'data/imgs/{args.input_name}.jpg'
@@ -227,8 +239,15 @@ if __name__ == '__main__':
         acc, jac = cal_metric(mask, gt_mask)
         print(f'Accuracy={acc}, Jaccard={jac}')
 
-    # Apply the final mask to the input image and display the results
     img_cut = img * (mask[:, :, np.newaxis])
+    x, y, w, h = rect
+    w -= x
+    h -= y
+    # Save only the rectangled mask
+    mask = mask[y:y+h, x:x+w]
+
+    cv2.imwrite(f'{imgname}_our_mask.bmp', 255 * mask)
+    # cv2.imwrite(f'{imgname}_our_cut.jpg', img_cut)
     cv2.imshow('Original Image', img)
     cv2.imshow('GrabCut Mask', 255 * mask)
     cv2.imshow('GrabCut Result', img_cut)

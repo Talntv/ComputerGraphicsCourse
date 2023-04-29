@@ -83,16 +83,18 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
     return im_blend
 
 
-def parse():
+def parse(imgname, bgname):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--src_path', type=str, default='./data/imgs/fullmoon.jpg', help='image file path')
-    parser.add_argument('--mask_path', type=str, default='./data/seg_GT/fullmoon.bmp', help='mask file path')
-    parser.add_argument('--tgt_path', type=str, default='./data/bg/wall.jpg', help='mask file path')
+    parser.add_argument('--src_path', type=str, default=f'./data/imgs/{imgname}.jpg', help='image file path')
+    parser.add_argument('--mask_path', type=str, default=f'./{imgname}_our_mask.bmp', help='mask file path')
+    parser.add_argument('--tgt_path', type=str, default=f'./data/bg/{bgname}.jpg', help='mask file path')
     return parser.parse_args()
 
 if __name__ == "__main__":
     # Load the source and target images
-    args = parse()
+    imgname = 'teddy'
+    bgname = 'wall'
+    args = parse(imgname, bgname)
 
     im_tgt = cv2.imread(args.tgt_path, cv2.IMREAD_COLOR)
     im_src = cv2.imread(args.src_path, cv2.IMREAD_COLOR)
