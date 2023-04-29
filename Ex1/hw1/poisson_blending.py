@@ -15,6 +15,7 @@ def format_imgs(src, tgt, mask):
 
     assert not (rows_src < 0 or cols_src < 0 or rows_mask < 0 or cols_mask < 0), "Incompatible images sizes"
 
+    # Extend src_img & mask to tgt_img dimensions, fill with 0s around to center them on the target.
     new_mask = np.zeros(tgt.shape[:2])
     new_source = np.ones(tgt.shape)
     new_source[rows_src//2:rows_src//2+src_shape[0], cols_src//2:cols_src//2+src_shape[1]] = src
@@ -23,6 +24,7 @@ def format_imgs(src, tgt, mask):
 
 def get_B_matrices(laplacian, im_src, im_tgt, im_mask):
     # For the construction of the B matrix we referred to this article: https://hingxyu.medium.com/gradient-domain-fusion-using-poisson-blending-8a7dc1bbaa7b
+    # We split the img by channels, as recommended
     Bs = []
     flat_mask = im_mask.flatten()
     for i in range(3):
@@ -38,6 +40,7 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
     global m, n
     m, n = im_tgt.shape[:2]
     img_size = m*n
+    # Build the sparse laplacian matrix
     laplacian = -1*(diags([-4*np.ones(m*n), np.ones(m*n-1), np.ones(m*n-1), np.ones(m*n-n), np.ones(m*n-n)],
                       [0, -1, 1, -n, n], format='lil'))
     A = laplacian.copy()
@@ -45,7 +48,7 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
     original_mask = im_mask.copy()
     
     # The next two lines are relevant for the case of the 'simple approach' from Oren's clarification
-    # Bs = get_B(laplacian, im_src, im_tgt, im_mask)
+    # Bs = get_B_matrices(laplacian, im_src, im_tgt, im_mask)
     # flat_tgt = im_tgt.reshape(m*n, 3)
 
     for pixel in range(img_size):
@@ -59,7 +62,7 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
                 not original_mask[row, col]):
                 nearby_border.append(n*row + col)
         if original_mask[i][j] == 0:
-            # Border pixels within the FG
+            # Border pixels in the FG
             A.rows[pixel] = [pixel]
             A.data[pixel] = [1]
         elif nearby_border:
@@ -71,11 +74,12 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
                 del A.data[pixel][idx]
 
                 # The next lines are the implementation of the 'simple approach', 
-                # Here we update A and B as we go instead of removing outer border pixels
+                # Here we update A and B as we go instead of removing outer border pixels from A
                 # A.data[pixel][idx] = -1
                 # for i in range(3):
                 #     Bs[i][zero_pixel] = flat_tgt[zero_pixel][i]
             im_mask[i][j] = 0
+    # Compress A for improved performance
     A = A.tocsc()
     Bs = get_B_matrices(laplacian, im_src, im_tgt, im_mask)
     Xs = [np.clip(spsolve(A, b).reshape((m, n)), 0, 255) for b in Bs]
