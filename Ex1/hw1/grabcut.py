@@ -13,24 +13,16 @@ GC_FGD = 1 # Hard fg pixel, will not be used
 GC_PR_BGD = 2 # Soft bg pixel
 GC_PR_FGD = 3 # Soft fg pixel
 
-def timing_val(func):
-    def wrapper(*arg, **kw):
-        t1 = time.time()
-        res = func(*arg, **kw)
-        t2 = time.time()
-        print(f'{func.__name__} took {(t2 - t1)}')
-        return res
-    return wrapper
-
+# Global variables
 flat_img = np.float64()
 n_link_capacities = []
-num_of_pixels = -1
 n_sums = []
 neighbors_of_each_pixel = {}
 k = -1
+num_of_pixels = -1
 convergence = -1
+latest_energy = -1
 
-@timing_val
 def calculate_beta(neighbors_of_each_pixel: dict, total_number_of_neighbors):
     sum_dist = 0
     for pixel in neighbors_of_each_pixel:
@@ -39,7 +31,6 @@ def calculate_beta(neighbors_of_each_pixel: dict, total_number_of_neighbors):
         sum_dist += np.sum(dist * dist)
     return 1 / (2 * sum_dist / total_number_of_neighbors)
 
-@timing_val
 def get_N_links_capacities(img):
     global n_link_capacities
     global neighbors_of_each_pixel
@@ -50,20 +41,17 @@ def get_N_links_capacities(img):
             edges = [pixels[i][j] for j in range(col-1, col+2) for i in range (row-1, row+2) if i >= 0 and i < len(pixels) and j >= 0 and j < len(pixels[0]) and not (i == row and j == col)]
             neighbors_of_each_pixel[pixels[row][col]] = edges
             total_number_of_neighbors += len(edges)
-
     beta = calculate_beta(neighbors_of_each_pixel, total_number_of_neighbors)
-    print(beta)
+    
     global n_sums
     n_sums = np.zeros(flat_img.shape[0])
-    for pixel in neighbors_of_each_pixel:
-        for neighbor in neighbors_of_each_pixel[pixel]:
-            delta = (flat_img[pixel] - flat_img[neighbor])
-            N = (50 / (np.linalg.norm(pixel - neighbor)) * np.exp(-beta * delta.dot(delta)))
-            n_link_capacities.append(N)
-            n_sums[pixel] += N
+    for pixel, neighbors in enumerate(neighbors_of_each_pixel.values()):
+        delta_new = (flat_img[pixel] - flat_img[neighbors]).astype(np.float64)
+        N_new = (50 / (np.linalg.norm(pixel - np.array(neighbors).reshape(1,len(neighbors)), axis=0)) * np.exp(-beta * np.diag(delta_new.dot(delta_new.T))))
+        n_link_capacities.extend(N_new)
+        n_sums[pixel] += np.sum(N_new)
     return n_sums
 
-@timing_val
 def get_T_links_capacities(mask, bgGMM, fgGMM):
     mask = mask.reshape(-1)
     K = max(n_sums)
@@ -71,10 +59,8 @@ def get_T_links_capacities(mask, bgGMM, fgGMM):
     target_capacities = np.where(mask == GC_BGD, K, 0)
     bgDn = calculate_Dn(bgGMM, flat_img[(mask != GC_BGD) & (mask != GC_FGD)])
     fgDn = calculate_Dn(fgGMM, flat_img[(mask != GC_BGD) & (mask != GC_FGD)])
-    
     source_capacities[(mask != GC_BGD) & (mask != GC_FGD)] = bgDn
     target_capacities[(mask != GC_BGD) & (mask != GC_FGD)] = fgDn
-    
     return source_capacities.tolist(), target_capacities.tolist()
 
 def calculate_Dn(GMM : GaussianMixture, z):
@@ -123,40 +109,31 @@ def initGMM(GMM : GaussianMixture, img, pixels):
         GMM.precisions_cholesky_[i] = cholesky(precisions[i], lower=True)
 
 # Define the GrabCut algorithm function
-@timing_val
-def grabcut(img, rect, n_iter=5):
+def grabcut(img, rect, n_iter=3):
     # Assign initial labels to the pixels based on the bounding box
     img = np.asarray(img, dtype=np.float64)
     mask = np.zeros(img.shape[:2], dtype=np.uint8)
     mask.fill(GC_BGD)
     x, y, w, h = rect
-
     w -= x
     h -= y
 
     #Initalize the inner square to Foreground
     mask[y:y+h, x:x+w] = GC_PR_FGD
     mask[rect[1]+rect[3]//2, rect[0]+rect[2]//2] = GC_FGD
-
-    bgGMM, fgGMM = initalize_GMMs(img, mask)
-
-    num_iters = 5
-    for i in range(num_iters):
+    bgGMM, fgGMM = initialize_GMMs(img)
+    for i in range(n_iter):
         #Update GMM
         bgGMM, fgGMM = update_GMMs(img, mask, bgGMM, fgGMM)
-
         mincut_sets, energy = calculate_mincut(img, mask, bgGMM, fgGMM)
-
         mask = update_mask(mincut_sets, mask)
-
         if check_convergence(energy):
             break
 
     # Return the final mask and the GMMs
     return mask, bgGMM, fgGMM
 
-@timing_val
-def initalize_GMMs(img, mask, n_components=5):
+def initialize_GMMs(img, n_components=5):
     bgGMM = GaussianMixture(n_components=n_components, covariance_type='full')
     fgGMM = GaussianMixture(n_components=n_components, covariance_type='full')
 
@@ -168,35 +145,26 @@ def initalize_GMMs(img, mask, n_components=5):
     get_N_links_capacities(img)
     return bgGMM, fgGMM
 
-@timing_val
 def update_GMMs(img, mask, bgGMM : GaussianMixture, fgGMM: GaussianMixture):
     bg_pixels = img[np.logical_or(mask == GC_BGD, mask == GC_PR_BGD)]
-    fg_pixels = img[np.logical_or(mask == GC_PR_FGD, mask == GC_FGD)]    
-
+    fg_pixels = img[np.logical_or(mask == GC_PR_FGD, mask == GC_FGD)]
     initGMM(bgGMM, img, bg_pixels)
     initGMM(fgGMM, img, fg_pixels)
-        
     return bgGMM, fgGMM
 
-@timing_val
 def calculate_mincut(img, mask, bgGMM, fgGMM):
     source_capacities, target_capacities = get_T_links_capacities(mask, bgGMM, fgGMM)
     capacities = source_capacities + target_capacities + n_link_capacities
     g = ig.Graph(num_of_pixels + 2)
     source, target = num_of_pixels, num_of_pixels + 1
-    print('initializied graph')
     neighbor_edges = [(pixel, neighbor) for pixel in neighbors_of_each_pixel for neighbor in neighbors_of_each_pixel[pixel]]
-
     source_edges = np.column_stack((np.full(num_of_pixels, source), np.arange(num_of_pixels)))
     target_edges = np.column_stack((np.arange(num_of_pixels), np.full(num_of_pixels, target)))
     g.add_edges(np.concatenate((source_edges, target_edges)).tolist() + neighbor_edges)
     min_cut = g.st_mincut(source, target, capacities)
     energy = min_cut.value
-    print(f'energy is {energy}')
     return [min_cut.partition[0], min_cut.partition[1]], energy
 
-
-@timing_val
 def update_mask(mincut_sets, mask: np.ndarray):
     rows, columns = mask.shape
     fg_v = mincut_sets[0]
@@ -205,31 +173,26 @@ def update_mask(mincut_sets, mask: np.ndarray):
     mask[pr_indexes] = np.where(np.isin(img_indexes[pr_indexes], fg_v), GC_PR_FGD, GC_PR_BGD)
     return mask
 
-@timing_val
 def check_convergence(energy):
-    global convergence
-    if convergence == -1:
-        convergence = energy
-        return False
-    if abs(convergence - energy) > 1:
-        return False
-    return True
+    global latest_energy
+    converged = True if np.abs(latest_energy - energy) < 1000 else False 
+    latest_energy = energy
+    return converged
 
-@timing_val
 def cal_metric(predicted_mask, gt_mask):
-    correct_pixels = np.sum(mask == gt_mask)
-    total_pixels = mask.shape[0] * mask.shape[1]
+    correct_pixels = np.sum(predicted_mask == gt_mask)
+    total_pixels = predicted_mask.shape[0] * predicted_mask.shape[1]
     accuracy = correct_pixels / total_pixels
 
-    intersection = np.sum(mask & gt_mask)
-    union = np.sum(mask | gt_mask)
+    intersection = np.sum(predicted_mask & gt_mask)
+    union = np.sum(predicted_mask | gt_mask)
     jaccard_similarity = intersection / union
 
     return accuracy, jaccard_similarity
 
 def parse():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_name', type=str, default='banana1', help='name of image from the course files')
+    parser.add_argument('--input_name', type=str, default='book', help='name of image from the course files')
     parser.add_argument('--eval', type=int, default=1, help='calculate the metrics')
     parser.add_argument('--input_img_path', type=str, default='', help='if you wish to use your own img_path')
     parser.add_argument('--use_file_rect', type=int, default=1, help='Read rect from course files')
@@ -240,7 +203,6 @@ if __name__ == '__main__':
     # Load an example image and define a bounding box around the object of interest
     args = parse()
 
-
     if args.input_img_path == '':
         input_path = f'data/imgs/{args.input_name}.jpg'
     else:
@@ -250,7 +212,6 @@ if __name__ == '__main__':
         rect = tuple(map(int, open(f"data/bboxes/{args.input_name}.txt", "r").read().split(' ')))
     else:
         rect = tuple(map(int,args.rect.split(',')))
-
 
     img = cv2.imread(input_path)
 
