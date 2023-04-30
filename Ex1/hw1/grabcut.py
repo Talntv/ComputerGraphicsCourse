@@ -1,4 +1,3 @@
-import time
 import numpy as np
 import cv2
 import argparse
@@ -21,15 +20,6 @@ num_of_pixels = -1
 convergence = -1
 latest_energy = -1
 
-def timing_val(func):
-    def wrapper(*arg, **kw):
-        t1 = time.time()
-        res = func(*arg, **kw)
-        t2 = time.time()
-        print(f'{func.__name__} took {(t2 - t1)}')
-        return res
-    return wrapper
-
 def calculate_beta(neighbors_of_each_pixel: dict, total_number_of_neighbors):
     sum_dist = 0
     for pixel in neighbors_of_each_pixel:
@@ -38,7 +28,6 @@ def calculate_beta(neighbors_of_each_pixel: dict, total_number_of_neighbors):
         sum_dist += np.sum(dist * dist)
     return 1 / (2 * sum_dist / total_number_of_neighbors)
 
-@timing_val
 def get_N_links_capacities(img):
     global n_link_capacities
     global neighbors_of_each_pixel
@@ -109,16 +98,8 @@ def update_GMM(GMM : GaussianMixture, img, pixels):
     GMM.means_ = centroids
     GMM.covariances_ = covariances
     GMM.weights_ = weights   
-    # precisions = np.zeros((n_components, img.shape[-1], img.shape[-1]))
-    # for i in range(n_components):
-    #     # Handle singular matrices
-    #     if np.linalg.det(GMM.covariances_[i]) == 0:
-    #         precisions[i] = GMM.covariances_[i] + np.eye(3) * 0.001
-    #     else:
-    #         precisions[i] = np.linalg.inv(GMM.covariances_[i])
 
 # Define the GrabCut algorithm function
-@timing_val
 def grabcut(img, rect, n_iter=5):
     # Assign initial labels to the pixels based on the bounding box
     img = np.asarray(img, dtype=np.float64)
@@ -133,22 +114,16 @@ def grabcut(img, rect, n_iter=5):
     mask[(rect[1]+rect[3])//2, (rect[0]+rect[2])//2] = GC_FGD
     bgGMM, fgGMM = initialize_GMMs(img)
     for i in range(n_iter):
-        print(f'Performing the {i+1}th iteration')
         bgGMM, fgGMM = update_GMMs(img, mask, bgGMM, fgGMM)
         mincut_sets, energy = calculate_mincut(img, mask, bgGMM, fgGMM)
         mask = update_mask(mincut_sets, mask)
         if check_convergence(energy):
             break
-
-    print(f'Finished after {i+1} iterations')
-
-    # Return the final mask and the GMMs
     return mask, bgGMM, fgGMM
 
 def initialize_GMMs(img, n_components=5):
     bgGMM = GaussianMixture(n_components=n_components, covariance_type='full')
     fgGMM = GaussianMixture(n_components=n_components, covariance_type='full')
-
     global flat_img
     global num_of_pixels
     flat_img = np.float32(img).reshape(-1,3)
@@ -207,9 +182,9 @@ def cal_metric(predicted_mask, gt_mask):
 
     return accuracy, jaccard_similarity
 
-def parse(imgname):
+def parse():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_name', type=str, default=imgname, help='name of image from the course files')
+    parser.add_argument('--input_name', type=str, default='banana1', help='name of image from the course files')
     parser.add_argument('--eval', type=int, default=1, help='calculate the metrics')
     parser.add_argument('--input_img_path', type=str, default='', help='if you wish to use your own img_path')
     parser.add_argument('--use_file_rect', type=int, default=1, help='Read rect from course files')
@@ -218,8 +193,7 @@ def parse(imgname):
 
 if __name__ == '__main__':
     # Load an example image and define a bounding box around the object of interest
-    imgname = 'teddy'
-    args = parse(imgname)
+    args = parse()
 
     if args.input_img_path == '':
         input_path = f'data/imgs/{args.input_name}.jpg'
@@ -247,9 +221,8 @@ if __name__ == '__main__':
         print(f'Accuracy={acc}, Jaccard={jac}')
 
     img_cut = img * (mask[:, :, np.newaxis])
-
-    cv2.imwrite(f'{imgname}_mask_cut.bmp', 255 * mask)
-    cv2.imwrite(f'{imgname}_imt_cut.bmp', img_cut)
+    # cv2.imwrite(f'{imgname}_mask_cut.bmp', 255 * mask)
+    # cv2.imwrite(f'{imgname}_imt_cut.bmp', img_cut)
     cv2.imshow('Original Image', img)
     cv2.imshow('GrabCut Mask', 255 * mask)
     cv2.imshow('GrabCut Result', img_cut)

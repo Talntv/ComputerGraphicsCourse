@@ -50,7 +50,6 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
     # The next two lines are relevant for the case of the 'simple approach' from Oren's clarification
     # Bs = get_B_matrices(laplacian, im_src, im_tgt, im_mask)
     # flat_tgt = im_tgt.reshape(m*n, 3)
-
     for pixel in range(img_size):
         i = pixel // n
         j = pixel % n
@@ -89,18 +88,16 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
     return im_blend
 
 
-def parse(imgname, bgname):
+def parse():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--src_path', type=str, default=f'./data/imgs/{imgname}.jpg', help='image file path')
-    parser.add_argument('--mask_path', type=str, default=f'./data/seg_GT/{imgname}.bmp', help='mask file path')
-    parser.add_argument('--tgt_path', type=str, default=f'./data/bg/{bgname}.jpeg', help='mask file path')
+    parser.add_argument('--src_path', type=str, default=f'./data/imgs/banana1.jpg', help='image file path')
+    parser.add_argument('--mask_path', type=str, default=f'./data/seg_GT/banana1.bmp', help='mask file path')
+    parser.add_argument('--tgt_path', type=str, default=f'./data/bg/table.jpg', help='mask file path')
     return parser.parse_args()
 
 if __name__ == "__main__":
     # Load the source and target images
-    imgname = 'llama'
-    bgname = 'grass_mountains'
-    args = parse(imgname, bgname)
+    args = parse()
 
     im_tgt = cv2.imread(args.tgt_path, cv2.IMREAD_COLOR)
     im_src = cv2.imread(args.src_path, cv2.IMREAD_COLOR)
