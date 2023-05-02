@@ -47,9 +47,6 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
     im_blend = im_tgt.copy()
     original_mask = im_mask.copy()
     
-    # The next two lines are relevant for the case of the 'simple approach' from Oren's clarification
-    # Bs = get_B_matrices(laplacian, im_src, im_tgt, im_mask)
-    # flat_tgt = im_tgt.reshape(m*n, 3)
     for pixel in range(img_size):
         i = pixel // n
         j = pixel % n
@@ -61,24 +58,17 @@ def poisson_blend(im_src, im_tgt, im_mask, center):
                 0 <= col < original_mask.shape[1] and
                 not original_mask[row, col]):
                 nearby_border.append(n*row + col)
+        # BG pixels, use the tgt_img to fill outer pixels, including borders
         if original_mask[i][j] == 0:
-            # BG pixels
             A.rows[pixel] = [pixel]
             A.data[pixel] = [1]
         elif nearby_border:
-            # Border pixles in the BG
+            # Exclude inner border pixels from the laplacian operator, such that they would take the tgt_img values
             for border in nearby_border:
-                # Implementation of the 'difficult approach' as described in Oren's clarification
                 idx = A.rows[pixel].index(border)
                 del A.rows[pixel][idx]
                 del A.data[pixel][idx]
-
-                # The next lines are the implementation of the 'simple approach', 
-                # Here we update A and B as we go instead of removing outer border pixels from A
-                # A.data[pixel][idx] = -1
-                # for i in range(3):
-                #     Bs[i][border] = flat_tgt[border][i]
-            # This would make the inner border pixels to take the tgt_img colors
+            # to have B exclude border pixels
             im_mask[i][j] = 0
     # Compress A for improved performance
     A = A.tocsc()
