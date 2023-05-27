@@ -16,20 +16,24 @@ def normalize(vector):
         return vector
     return vector / magnitude
 
-def get_ray(camera, i, j, width, height):
+def get_normalized_camera_parameters(camera, width):
     normalized_look_at = normalize(camera.look_at)
     center_point = camera.position + camera.screen_distance * normalized_look_at
     v_right = normalize(np.cross(normalized_look_at, camera.up_vector))
     v_up = normalize(np.cross(v_right, normalized_look_at))
     ratio = 1/width
-    p = center_point + (j - width//2) * ratio * v_right - (i - height//2) * ratio * v_up
-    return p
+    return (center_point, v_up, v_right, ratio)
+
+def get_ray(center_point, v_up, v_right, ratio, i, j, width, height):
+    return center_point + (j - width//2) * ratio * v_right - (i - height//2) * ratio * v_up
 
 def intersections(ray, object, camera_origin, intersection_type):
     if intersection_type is Sphere:
-        b = np.dot(2*ray, camera_origin - object.position)
-        c = np.linalg.norm(camera_origin - object.position)**2 - object.radius**2
+        oc = camera_origin - object.position
+        b = 2*np.dot(ray, oc)
+        c = np.dot(oc, oc) - object.radius**2
         delta = b**2 - 4*c
+        # -> 2 intersected points
         if delta > 0:
             t1 = (-b + np.sqrt(delta)) / 2
             t2 = (-b - np.sqrt(delta)) / 2
@@ -45,16 +49,20 @@ def intersections(ray, object, camera_origin, intersection_type):
             return t if t > 0 else None
            
     elif intersection_type is Cube:
-        t_min = np.full_like(camera_origin, -np.inf)  # Minimum intersection t-values for each axis
-        t_max = np.full_like(camera_origin, np.inf)   # Maximum intersection t-values for each axis
-        for i in range(3):  # x, y, z axes
-            if ray[i] != 0:  # Avoid division by zero
-                t1 = (object.position[i] - object.scale / 2 - camera_origin[i]) / ray[i]
-                t2 = (object.position[i] + object.scale / 2 - camera_origin[i]) / ray[i]
+        t_min = np.full_like(camera_origin, -np.inf)
+        t_max = np.full_like(camera_origin, np.inf)
+        # x, y, z axes
+        for i in range(3):
+            if abs(ray[i]) > 0:
+                # find the intersections with 2 parallel faces in the same axis
+                t1 = (object.position[i] - (object.scale / 2) - camera_origin[i]) / ray[i]
+                t2 = (object.position[i] + (object.scale / 2) - camera_origin[i]) / ray[i]
                 t_min[i] = min(t1, t2)
                 t_max[i] = max(t1, t2)
         t_enter = np.max(t_min)
         t_exit = np.min(t_max)
+        # If there exists some face of the cube that was hit before all 3 faces were hit,
+        # The ray doesn't hit the cube.
         return t_enter if t_enter <= t_exit else None
     
     else:
@@ -71,24 +79,33 @@ def get_hit(pixel, objects, position):
     return min_array
 
 def get_color(hit, materials):
+    if not hit:
+        return 0 
     idx = hit[1].material_index
     return 255*np.asarray(materials[idx-1].diffuse_color)
 
-def get_materials(objects):
+def split_objects(objects):
     materials = []
+    surfaces = []
+    lights = []
     for object in objects:
         if type(object) is Material:
             materials.append(object)
-    return materials
+        elif type(object) is Light:
+            lights.append(object)
+        else:
+            surfaces.append(object)
+    return (materials, surfaces, lights)
 
 def get_scene(camera, settings, objects, width, height):
     img = np.zeros((height, width, 3))
-    materials = get_materials(objects)
+    materials, surfaces, lights = split_objects(objects)
+    center_point, v_up, v_right, ratio = get_normalized_camera_parameters(camera, width)
     for i in range(height):
         print(i)
         for j in range(width):
-            ray = get_ray(camera, i, j, width, height)
-            hit = get_hit(ray, objects, camera.position)
+            ray = get_ray(center_point, v_up, v_right, ratio, i, j, width, height)
+            hit = get_hit(ray, surfaces, camera.position)
             img[i][j] = get_color(hit, materials)
     return img
 
@@ -137,8 +154,8 @@ def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
     parser.add_argument('scene_file', type=str, default=".\scenes\pool.txt", help='Path to the scene file')
     parser.add_argument('output_image', type=str, default="dummy_output.png", help='Name of the output image file')
-    parser.add_argument('--width', type=int, default=50, help='Image width')
-    parser.add_argument('--height', type=int, default=50, help='Image height')
+    parser.add_argument('--width', type=int, default=500, help='Image width')
+    parser.add_argument('--height', type=int, default=500, help='Image height')
     args = parser.parse_args()
 
     # Parse the scene file
