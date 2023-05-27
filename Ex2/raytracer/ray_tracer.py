@@ -71,10 +71,8 @@ def get_hit(pixel, objects, position):
     return min_array
 
 def get_color(hit, materials):
-    print(hit)
     idx = hit[1].material_index
-    return np.asarray(materials[idx-1].diffuse_color)
-    
+    return 255*np.asarray(materials[idx-1].diffuse_color)
 
 def get_materials(objects):
     materials = []
@@ -132,7 +130,6 @@ def parse_scene_file(file_path):
 
 def save_image(image_array, new_image_path):
     image = Image.fromarray(np.uint8(image_array))
-
     # Save the image to a file
     image.save(new_image_path)
 
