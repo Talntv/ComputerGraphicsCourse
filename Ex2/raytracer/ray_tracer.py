@@ -32,12 +32,7 @@ def construct_ray_through_pixel(camera, i, j):
     return p
 
 def intersection(pixel, settings, objects, position):
-    min_inter = 0
     normalized_ray = normalize(pixel - position)
-    # cube:
-    # self.position = position
-    # self.scale = scale
-    # self.material_index = material_index
     def sphere_intersection(ray, object, position):
         b = np.dot(2*ray, position - object.position)
         c = np.linalg.norm(position-object.position)**2 - object.radius**2
@@ -49,14 +44,6 @@ def intersection(pixel, settings, objects, position):
                 return min(t1, t2)
         return None
     
-        roots = np.roots([a, b, c])
-        positive_instances = roots[roots > 0]
-        if len(positive_instances) == 0:
-            return None
-        # Find the minimal positive instance
-        sphere_intersections = np.min(positive_instances)
-        return sphere_intersections
-    
     def infinite_plane_intersection(ray, object, position):
         dot_product = np.dot(object.normal, ray)
         # If false, the ray and the plane are parallel
@@ -66,20 +53,40 @@ def intersection(pixel, settings, objects, position):
             return infinite_plane_intersections
            
     def cube_intersection(ray, object, position):
-        return
+        min_bound = object.position - object.scale / 2
+        max_bound = object.position + object.scale / 2
+        # Calculate the inverse direction components to avoid division in each iteration
+        inv_direction = 1.0 / ray
+        # Calculate the intersection intervals for each axis
+        tmin = (min_bound - position) * inv_direction
+        tmax = (max_bound - position) * inv_direction
+        # Find the maximum and minimum intersection intervals
+        tmin = np.maximum(tmin, np.min(tmax, axis=0))
+        tmax = np.minimum(tmax, np.max(tmin, axis=0))
+        # Check if there is a valid intersection
+        if np.any(tmax < 0) or np.any(tmin > tmax):
+            return None
+        # Calculate the intersection point
+        t = np.max(tmin)
+        intersection_point = position + ray * t
+
+        return intersection_point
     
+    distances = []
     for object in objects:
         if (type(object) == Sphere):
-            res = sphere_intersection(normalized_ray, object, position)
-            if res:
-                if min_inter == 0 or res < min_inter:
-                    min_inter = res
-        # elif (type(object) == Cube):
-        #     intersections.append(cube_intersection(ray, object, position))
-        # elif (type(object) == InfinitePlane):
-        #     intersections.append(infinite_plane_intersection(ray, object, position))
-    ret = min_inter if min_inter > 0 else None
-    return ret
+            distance = sphere_intersection(normalized_ray, object, position)
+            if distance:
+                distances.append(distance)
+        elif (type(object) == Cube):
+            distance = cube_intersection(normalized_ray, object, position)
+            if distance:
+                distances.append(distance)
+        elif (type(object) == InfinitePlane):
+            distance = infinite_plane_intersection(normalized_ray, object, position)
+            if distance:
+                distances.append(distance)
+    return min(distances)
 
 def get_color(hit):
     return 255
@@ -149,7 +156,7 @@ def main():
     # Parse the scene file
     camera, scene_settings, objects = parse_scene_file(args.scene_file)
 
-    image_array = get_scene(camera, scene_settings, objects, 500, 500)
+    image_array = get_scene(camera, scene_settings, objects, 400, 400)
 
     # Save the output image
     save_image(image_array, args.output_image)
