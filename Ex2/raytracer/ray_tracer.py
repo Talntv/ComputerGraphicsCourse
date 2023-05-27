@@ -16,26 +16,19 @@ def normalize(vector):
         return vector
     return vector / magnitude
 
-def construct_ray_through_pixel(camera, i, j):
-    # self.position = position  === P0
-    # self.look_at = look_at === Vt0 (need to normalize)
-    # self.up_vector = up_vector === Vup (need to normalize)
-    # self.screen_distance = screen_distance === d
-    # self.screen_width = screen_width === w
-    # we want the intersection point P and the intersection direction V
+def get_ray(camera, i, j, width, height):
     normalized_look_at = normalize(camera.look_at)
     center_point = camera.position + camera.screen_distance * normalized_look_at
     v_right = normalize(np.cross(normalized_look_at, camera.up_vector))
     v_up = normalize(np.cross(v_right, normalized_look_at))
-    ratio = 1/50 # come back to this
-    p = center_point + (j - 25) * ratio * v_right - (i - 25) * ratio * v_up
+    ratio = 1/width
+    p = center_point + (j - width//2) * ratio * v_right - (i - height//2) * ratio * v_up
     return p
 
-def intersection(pixel, settings, objects, position):
-    normalized_ray = normalize(pixel - position)
-    def sphere_intersection(ray, object, position):
-        b = np.dot(2*ray, position - object.position)
-        c = np.linalg.norm(position-object.position)**2 - object.radius**2
+def intersections(ray, object, camera_origin, intersection_type):
+    if intersection_type is Sphere:
+        b = np.dot(2*ray, camera_origin - object.position)
+        c = np.linalg.norm(camera_origin - object.position)**2 - object.radius**2
         delta = b**2 - 4*c
         if delta > 0:
             t1 = (-b + np.sqrt(delta)) / 2
@@ -44,63 +37,61 @@ def intersection(pixel, settings, objects, position):
                 return min(t1, t2)
         return None
     
-    def infinite_plane_intersection(ray, object, position):
+    elif intersection_type is InfinitePlane:
         dot_product = np.dot(object.normal, ray)
         # If false, the ray and the plane are parallel
         if abs(dot_product) >= 1e-6:
-            t = -(np.dot(object.normal, position) + object.offset) / dot_product
-            infinite_plane_intersections = position + t*ray
-            return infinite_plane_intersections
+            t = -(np.dot(object.normal, camera_origin) + object.offset) / dot_product
+            return t if t > 0 else None
            
-    def cube_intersection(ray, object, position):
-        min_bound = object.position - object.scale / 2
-        max_bound = object.position + object.scale / 2
-        # Calculate the inverse direction components to avoid division in each iteration
-        inv_direction = 1.0 / ray
-        # Calculate the intersection intervals for each axis
-        tmin = (min_bound - position) * inv_direction
-        tmax = (max_bound - position) * inv_direction
-        # Find the maximum and minimum intersection intervals
-        tmin = np.maximum(tmin, np.min(tmax, axis=0))
-        tmax = np.minimum(tmax, np.max(tmin, axis=0))
-        # Check if there is a valid intersection
-        if np.any(tmax < 0) or np.any(tmin > tmax):
-            return None
-        # Calculate the intersection point
-        t = np.max(tmin)
-        intersection_point = position + ray * t
-
-        return intersection_point
+    elif intersection_type is Cube:
+        t_min = np.full_like(camera_origin, -np.inf)  # Minimum intersection t-values for each axis
+        t_max = np.full_like(camera_origin, np.inf)   # Maximum intersection t-values for each axis
+        for i in range(3):  # x, y, z axes
+            if ray[i] != 0:  # Avoid division by zero
+                t1 = (object.position[i] - object.scale / 2 - camera_origin[i]) / ray[i]
+                t2 = (object.position[i] + object.scale / 2 - camera_origin[i]) / ray[i]
+                t_min[i] = min(t1, t2)
+                t_max[i] = max(t1, t2)
+        t_enter = np.max(t_min)
+        t_exit = np.min(t_max)
+        return t_enter if t_enter <= t_exit else None
     
+    else:
+        return
+
+def get_hit(pixel, objects, position):
+    normalized_ray = normalize(pixel - position)
     distances = []
     for object in objects:
-        if (type(object) == Sphere):
-            distance = sphere_intersection(normalized_ray, object, position)
-            if distance:
-                distances.append(distance)
-        elif (type(object) == Cube):
-            distance = cube_intersection(normalized_ray, object, position)
-            if distance:
-                distances.append(distance)
-        elif (type(object) == InfinitePlane):
-            distance = infinite_plane_intersection(normalized_ray, object, position)
-            if distance:
-                distances.append(distance)
-    return min(distances)
+        distance = intersections(normalized_ray, object, position, type(object))
+        if distance:
+                distances.append([distance, object])
+    min_array = min(distances, key=lambda x: x[0]) if distances else None
+    return min_array
 
-def get_color(hit):
-    return 255
+def get_color(hit, materials):
+    print(hit)
+    idx = hit[1].material_index
+    return np.asarray(materials[idx-1].diffuse_color)
+    
+
+def get_materials(objects):
+    materials = []
+    for object in objects:
+        if type(object) is Material:
+            materials.append(object)
+    return materials
 
 def get_scene(camera, settings, objects, width, height):
-    img = np.zeros((50, 50, 3))
-    for i in range(50):
+    img = np.zeros((height, width, 3))
+    materials = get_materials(objects)
+    for i in range(height):
         print(i)
-        for j in range(50):
-            # Get the direction (V) and intersection point (P) with the image plane
-            ray = construct_ray_through_pixel(camera, i, j)
-            hit = intersection(ray, settings, objects, camera.position)
-            if hit:
-                img[i][j] = get_color(hit)
+        for j in range(width):
+            ray = get_ray(camera, i, j, width, height)
+            hit = get_hit(ray, objects, camera.position)
+            img[i][j] = get_color(hit, materials)
     return img
 
 def parse_scene_file(file_path):
@@ -149,14 +140,14 @@ def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
     parser.add_argument('scene_file', type=str, default=".\scenes\pool.txt", help='Path to the scene file')
     parser.add_argument('output_image', type=str, default="dummy_output.png", help='Name of the output image file')
-    parser.add_argument('--width', type=int, default=500, help='Image width')
-    parser.add_argument('--height', type=int, default=500, help='Image height')
+    parser.add_argument('--width', type=int, default=50, help='Image width')
+    parser.add_argument('--height', type=int, default=50, help='Image height')
     args = parser.parse_args()
 
     # Parse the scene file
     camera, scene_settings, objects = parse_scene_file(args.scene_file)
 
-    image_array = get_scene(camera, scene_settings, objects, 400, 400)
+    image_array = get_scene(camera, scene_settings, objects, args.width, args.height)
 
     # Save the output image
     save_image(image_array, args.output_image)
