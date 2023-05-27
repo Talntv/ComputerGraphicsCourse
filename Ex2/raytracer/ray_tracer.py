@@ -59,6 +59,8 @@ def intersections(ray, object, camera_origin, intersection_type):
                 t2 = (object.position[i] + (object.scale / 2) - camera_origin[i]) / ray[i]
                 t_min[i] = min(t1, t2)
                 t_max[i] = max(t1, t2)
+            elif (camera_origin[i] <= (object.position[i] - (object.scale / 2)) or camera_origin[i] >= ((object.position[i] + (object.scale / 2)))):
+                return None
         t_enter = np.max(t_min)
         t_exit = np.min(t_max)
         # If there exists some face of the cube that was hit before all 3 faces were hit,
