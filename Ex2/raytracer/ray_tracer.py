@@ -27,23 +27,21 @@ def construct_ray_through_pixel(camera, i, j):
     center_point = camera.position + camera.screen_distance * normalized_look_at
     v_right = normalize(np.cross(normalized_look_at, camera.up_vector))
     v_up = normalize(np.cross(v_right, normalized_look_at))
-    ratio = 1/500 # come back to this
-    p = center_point + (j - 250) * ratio * v_right - (i - 250) * ratio * v_up
+    ratio = 1/50 # come back to this
+    p = center_point + (j - 25) * ratio * v_right - (i - 25) * ratio * v_up
     return p
 
-def intersection(ray, settings, objects, position):
+def intersection(pixel, settings, objects, position):
     min_inter = 0
+    normalized_ray = normalize(pixel - position)
     # cube:
     # self.position = position
     # self.scale = scale
     # self.material_index = material_index
     def sphere_intersection(ray, object, position):
-        normalized_ray = normalize(ray - position)
-        a = 1
-        b = np.dot(2*normalized_ray, position - object.position)
+        b = np.dot(2*ray, position - object.position)
         c = np.linalg.norm(position-object.position)**2 - object.radius**2
-
-        delta = b ** 2 - 4 * c
+        delta = b**2 - 4*c
         if delta > 0:
             t1 = (-b + np.sqrt(delta)) / 2
             t2 = (-b - np.sqrt(delta)) / 2
@@ -60,19 +58,19 @@ def intersection(ray, settings, objects, position):
         return sphere_intersections
     
     def infinite_plane_intersection(ray, object, position):
-        V = ray - position
-        dot_product = np.dot(object.normal, V)
+        dot_product = np.dot(object.normal, ray)
+        # If false, the ray and the plane are parallel
         if abs(dot_product) >= 1e-6:
-            t = (object.offset - np.dot(object.normal, position))/dot_product
-            infinite_plane_intersections = position + t * V
-            return min(infinite_plane_intersections) 
+            t = -(np.dot(object.normal, position) + object.offset) / dot_product
+            infinite_plane_intersections = position + t*ray
+            return infinite_plane_intersections
            
     def cube_intersection(ray, object, position):
         return
     
     for object in objects:
         if (type(object) == Sphere):
-            res = sphere_intersection(ray, object, position)
+            res = sphere_intersection(normalized_ray, object, position)
             if res:
                 if min_inter == 0 or res < min_inter:
                     min_inter = res
@@ -87,10 +85,10 @@ def get_color(hit):
     return 255
 
 def get_scene(camera, settings, objects, width, height):
-    img = np.zeros((500, 500, 3))
-    for i in range(500):
+    img = np.zeros((50, 50, 3))
+    for i in range(50):
         print(i)
-        for j in range(500):
+        for j in range(50):
             # Get the direction (V) and intersection point (P) with the image plane
             ray = construct_ray_through_pixel(camera, i, j)
             hit = intersection(ray, settings, objects, camera.position)
