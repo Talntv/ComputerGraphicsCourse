@@ -16,6 +16,13 @@ def normalize(vector):
         return vector
     return vector / magnitude
 
+def normalize_multiple(vectors):
+    normalized_vectors = np.copy(vectors)
+    for i in range(len(normalized_vectors)):
+        for j in range(len(normalized_vectors[0])):
+            normalized_vectors[i][j] = normalize(vectors[i][j])
+    return normalized_vectors
+
 def get_normalized_camera_parameters(camera, width):
     normalized_look_at = normalize(camera.look_at)
     center_point = camera.position + camera.screen_distance * normalized_look_at
@@ -24,61 +31,71 @@ def get_normalized_camera_parameters(camera, width):
     ratio = 1/width
     return (center_point, v_up, v_right, ratio)
 
-def get_ray(center_point, v_up, v_right, ratio, i, j, width, height):
-    return center_point + (j - width//2) * ratio * v_right - (i - height//2) * ratio * v_up
+def get_rays(center_point, v_up, v_right, ratio, i_coords, j_coords, width, height):
+    v_up = v_up.reshape(1, 1, 3) 
+    v_right = v_right.reshape(1, 1, 3)
+    return center_point + np.expand_dims((j_coords - width//2), 2) * ratio * v_right - np.expand_dims((i_coords - height//2), 2) * ratio * v_up
 
-def intersections(ray, object, camera_origin, intersection_type):
-    if intersection_type is Sphere:
-        oc = camera_origin - object.position
-        b = 2*np.dot(ray, oc)
-        c = np.dot(oc, oc) - object.radius**2
-        delta = b**2 - 4*c
-        # -> 2 intersected points
-        if delta > 0:
-            t1 = (-b + np.sqrt(delta)) / 2
-            t2 = (-b - np.sqrt(delta)) / 2
-            if t1 > 0 and t2 > 0:
-                return min(t1, t2)
-        return None
-    
-    elif intersection_type is InfinitePlane:
-        dot_product = np.dot(object.normal, ray)
-        # If false, the ray and the plane are parallel
-        if abs(dot_product) >= 1e-6:
-            t = -(np.dot(object.normal, camera_origin) + object.offset) / dot_product
-            return t if t > 0 else None
-           
-    elif intersection_type is Cube:
-        t_min = np.full_like(camera_origin, -np.inf)
-        t_max = np.full_like(camera_origin, np.inf)
-        # x, y, z axes
-        for i in range(3):
-            if abs(ray[i]) > 0:
-                # find the intersections with 2 parallel faces in the same axis
-                t1 = (object.position[i] - (object.scale / 2) - camera_origin[i]) / ray[i]
-                t2 = (object.position[i] + (object.scale / 2) - camera_origin[i]) / ray[i]
-                t_min[i] = min(t1, t2)
-                t_max[i] = max(t1, t2)
-            elif (camera_origin[i] <= (object.position[i] - (object.scale / 2)) or camera_origin[i] >= ((object.position[i] + (object.scale / 2)))):
-                return None
-        t_enter = np.max(t_min)
-        t_exit = np.min(t_max)
-        # If there exists some face of the cube that was hit before all 3 faces were hit,
-        # The ray doesn't hit the cube.
-        return t_enter if t_enter <= t_exit else None
-    
-    else:
-        return
+def intersections(rays, objects, camera_origin):
+    hits = []
+    min_hits = np.empty(rays.shape[:2], dtype=np.ndarray)
 
-def get_hit(pixel, objects, position):
-    normalized_ray = normalize(pixel - position)
-    distances = []
     for object in objects:
-        distance = intersections(normalized_ray, object, position, type(object))
-        if distance:
-                distances.append([distance, object])
-    min_array = min(distances, key=lambda x: x[0]) if distances else None
-    return min_array
+        if isinstance(object, Sphere):
+            oc = camera_origin - object.position
+            b = 2* np.sum(rays * oc, axis=-1)
+            c = np.sum(oc**2, axis=-1) - object.radius**2
+            delta = b**2 - 4 * c
+            t1 = (-b + np.sqrt(np.maximum(delta, 0))) / 2
+            t2 = (-b - np.sqrt(np.maximum(delta, 0))) / 2
+            t = np.where(delta >= 0, np.minimum(t1, t2), np.inf)
+            hits.append((t, object))
+
+        elif isinstance(object, InfinitePlane):
+            dot_product = np.sum(object.normal * rays, axis=-1)  # Dot product calculation
+            valid_hits = np.abs(dot_product) >= 1e-6
+            t = np.where(valid_hits, -(np.dot(object.normal, camera_origin) + object.offset) / dot_product, np.inf)
+            hits.append((t, object))
+
+        elif isinstance(object, Cube):
+            t_min = np.full_like(rays, -np.inf)
+            t_max = np.full_like(rays, np.inf)
+            for i in range(3):
+                pos_face = object.position[i] + (object.scale / 2)
+                neg_face = object.position[i] - (object.scale / 2)
+                mask = np.abs(rays[..., i]) > 0
+                t1 = np.where(mask, (neg_face - camera_origin[..., i]) / rays[..., i], np.inf)
+                t2 = np.where(mask, (pos_face - camera_origin[..., i]) / rays[..., i], -np.inf)
+                t_min[..., i] = np.minimum(t1, t2)
+                t_max[..., i] = np.maximum(t1, t2)
+            t_enter = np.amax(t_min, axis=-1)
+            t_exit = np.amin(t_max, axis=-1)
+            hits.append((np.where(t_enter <= t_exit, t_enter, np.inf), object))
+
+    # Combine all hits into a single array
+    if hits:
+        for i in range(rays.shape[0]):
+            for j in range(rays.shape[1]):
+                min_hit = np.Inf
+                min_obj = ""
+                for q in range(len(objects)):
+                    if hits[q][0][i][j] <= min_hit:
+                        min_hit = hits[q][0][i][j]
+                        min_obj = hits[q][1]
+                min_hits[i][j] = [min_hit,min_obj]
+        return min_hits
+
+    return None    
+
+def get_hits(rays, objects, position):
+    normalized_rays = normalize_multiple(rays-position) 
+    return intersections(normalized_rays, objects, position)
+    # for object in objects:
+    #     distance = intersections(rays, object, position, type(object))
+    #     if distance:
+    #             distances.append([distance, object])
+    # min_array = min(distances, key=lambda x: x[0]) if distances else None
+    # return min_array
 
 def get_color(hit, materials):
     if not hit:
@@ -103,12 +120,12 @@ def get_scene(camera, settings, objects, width, height):
     img = np.zeros((height, width, 3))
     materials, surfaces, lights = split_objects(objects)
     center_point, v_up, v_right, ratio = get_normalized_camera_parameters(camera, width)
+    i_coords, j_coords = np.meshgrid(np.arange(height), np.arange(width), indexing='ij')
+    rays = get_rays(center_point, v_up, v_right, ratio, i_coords, j_coords, width, height)
+    hits = get_hits(rays, surfaces, camera.position)
     for i in range(height):
-        print(i)
         for j in range(width):
-            ray = get_ray(center_point, v_up, v_right, ratio, i, j, width, height)
-            hit = get_hit(ray, surfaces, camera.position)
-            img[i][j] = get_color(hit, materials)
+            img[i][j] = get_color(hits[i][j], materials)
     return img
 
 def parse_scene_file(file_path):
