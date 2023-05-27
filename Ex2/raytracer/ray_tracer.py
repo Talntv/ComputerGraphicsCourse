@@ -23,37 +23,35 @@ def construct_ray_through_pixel(camera, i, j):
     # self.screen_distance = screen_distance === d
     # self.screen_width = screen_width === w
     # we want the intersection point P and the intersection direction V
-    w = (camera.look_at - camera.position) / np.linalg.norm(camera.look_at - camera.position)
-    u = np.cross(camera.up_vector, w) / np.linalg.norm(np.cross(camera.up_vector, w))
-    v = np.cross(w, u)
-
-    # Step 2: Convert pixel coordinates to NDC
-    aspect_ratio = camera.screen_width / camera.screen_distance
-    x_ndc = (j - camera.screen_width / 2) / (camera.screen_width / 2)
-    y_ndc = (i - camera.screen_width / 2) / (camera.screen_width / 2) * aspect_ratio
-
-    # Step 3: Calculate ray direction
-    direction = w + u * x_ndc + v * y_ndc
-    return direction / np.linalg.norm(direction)
-    # center_point = camera.position + camera.screen_distance * camera.look_at
-    # v_right = normalize(np.cross(camera.look_at, camera.up_vector))
-    # v_up = normalize(np.cross(v_right, camera.look_at))
-    # ratio = 1 # come back to this
-    # p = center_point + (i - 250) * ratio * v_right - (j - 250) * ratio * v_up
-    # return p
+    normalized_look_at = normalize(camera.look_at)
+    center_point = camera.position + camera.screen_distance * normalized_look_at
+    v_right = normalize(np.cross(normalized_look_at, camera.up_vector))
+    v_up = normalize(np.cross(v_right, normalized_look_at))
+    ratio = 1/500 # come back to this
+    p = center_point + (j - 250) * ratio * v_right - (i - 250) * ratio * v_up
+    return p
 
 def intersection(ray, settings, objects, position):
     min_inter = 0
-    # cube -
+    # cube:
     # self.position = position
     # self.scale = scale
     # self.material_index = material_index
     def sphere_intersection(ray, object, position):
+        normalized_ray = normalize(ray - position)
         a = 1
-        b = np.dot(2*ray, position - object.position)
+        b = np.dot(2*normalized_ray, position - object.position)
         c = np.linalg.norm(position-object.position)**2 - object.radius**2
-        coeffs = [a, b, c]
-        roots = np.roots(coeffs)
+
+        delta = b ** 2 - 4 * c
+        if delta > 0:
+            t1 = (-b + np.sqrt(delta)) / 2
+            t2 = (-b - np.sqrt(delta)) / 2
+            if t1 > 0 and t2 > 0:
+                return min(t1, t2)
+        return None
+    
+        roots = np.roots([a, b, c])
         positive_instances = roots[roots > 0]
         if len(positive_instances) == 0:
             return None
