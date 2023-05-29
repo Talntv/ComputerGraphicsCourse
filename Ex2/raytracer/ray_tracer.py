@@ -54,7 +54,7 @@ def intersections(rays, objects, camera_origin):
         elif isinstance(object, InfinitePlane):
             dot_product = np.sum(object.normal * rays, axis=-1)  # Dot product calculation
             valid_hits = np.abs(dot_product) >= 1e-6
-            t = np.where(valid_hits, -(np.dot(object.normal, camera_origin) + object.offset) / dot_product, np.inf)
+            t = np.where(valid_hits, (np.dot(object.offset - camera_origin, object.normal)) / dot_product, np.inf)
             hits.append((t, object))
 
         elif isinstance(object, Cube):
