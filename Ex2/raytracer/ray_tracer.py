@@ -38,7 +38,8 @@ def get_rays(center_point, v_up, v_right, ratio, i_coords, j_coords, width, heig
 
 def intersections(rays, objects, camera_origin):
     hits = []
-    min_hits = np.empty(rays.shape[:2], dtype=np.ndarray)
+    rays_hits = np.empty(rays.shape[:2], dtype=np.ndarray)
+    light_hits = []
 
     for object in objects:
         if isinstance(object, Sphere):
@@ -73,29 +74,64 @@ def intersections(rays, objects, camera_origin):
             hits.append((np.where(t_enter <= t_exit, t_enter, np.inf), object))
 
     # Combine all hits into a single array
-    if hits:
+    if hits and rays.ndim > 1:
         for i in range(rays.shape[0]):
             for j in range(rays.shape[1]):
-                min_hit = np.Inf
-                min_obj = ""
                 for q in range(len(objects)):
-                    if hits[q][0][i][j] <= min_hit:
-                        min_hit = hits[q][0][i][j]
-                        min_obj = hits[q][1]
-                min_hits[i][j] = [min_hit,min_obj]
-        return min_hits
-
+                    if hits[q][0][i][j] != np.inf:
+                        if rays_hits[i][j] is None:
+                            rays_hits[i][j] = [[hits[q][0][i][j], hits[q][1]]]
+                        else:
+                            rays_hits[i][j].append([hits[q][0][i][j], hits[q][1]])
+                rays_hits[i][j] = sorted(rays_hits[i][j], key=lambda x: x[0])
+        return rays_hits
+    
+    elif hits:
+        for q in range(len(objects)):
+            if hits[q][0] != np.inf:
+                light_hits.append([hits[q][0], hits[q][1]])
+        return light_hits
     return None    
 
 def get_hits(rays, objects, position):
     normalized_rays = normalize_multiple(rays-position) 
     return intersections(normalized_rays, objects, position)
 
-def get_color(hit, materials):
+# def is_first_hit(light, location, scene_objects):
+    # direction = normalize(np.array(location) - np.array(light.position))
+    # intersection_distance = intersections(direction, scene_objects, light.position)
+    # sorted_intersections = sorted(intersection_distance)
+    # hit_location = light.position + sorted_intersections[0] * direction
+    # for i in range(3):
+    #     if abs(hit_location[i] - location[i]) > 1e-10:
+    #         return False
+    # return True
+
+def get_color(hit, ray, bg, camera_origin, materials, lights, surfaces, camera):
+    color = np.zeros((3))
+    V = normalize(ray - camera_origin)
     if not hit:
-        return 0 
-    idx = hit[1].material_index
-    return 255*np.asarray(materials[idx-1].diffuse_color)
+        return bg 
+    material = materials[hit[0][1].material_index-1]
+    if type(hit[0][1]) == InfinitePlane:
+        return 255 * material.diffuse_color
+    intersection_point = camera_origin + hit[0][0] * V
+    normal_to_surface = normalize(intersection_point - hit[0][1].position) if type(hit[0][1]) != InfinitePlane else hit[0][1].normal
+    for light in lights:
+        direction_to_light = normalize(light.position - intersection_point)
+        direction_to_ray_origin = normalize(camera.position - intersection_point)
+        shited_intersection = intersection_point + normal_to_surface * 0.00001
+        min_distance = sorted(intersections(direction_to_light, surfaces, shited_intersection))
+        is_shadowed = (hit[0][1] == min_distance[0][1])
+        if (is_shadowed):
+            continue
+        else:
+            # Kd(N.dot(Li))
+            color += material.diffuse_color * np.maximum(normal_to_surface.dot(direction_to_light), 0) * light.color
+            # Ks((V.dot(R))^n)
+            phong = normal_to_surface.dot(normalize((direction_to_light + direction_to_ray_origin)))
+            color += np.power(np.clip(phong, 0, 1), material.shininess) * material.specular_color
+    return 255 * np.clip(color, 0, 1)
 
 def split_objects(objects):
     materials = []
@@ -119,7 +155,7 @@ def get_scene(camera, settings, objects, width, height):
     hits = get_hits(rays, surfaces, camera.position)
     for i in range(height):
         for j in range(width):
-            img[i][j] = get_color(hits[i][j], materials)
+            img[i][j] = get_color(hits[i][j], rays[i][j], settings.background_color, camera.position, materials, lights, surfaces, camera)
     return img
 
 def parse_scene_file(file_path):
@@ -137,9 +173,9 @@ def parse_scene_file(file_path):
             if obj_type == "cam":
                 camera = Camera(np.asarray(params[:3]), np.asarray(params[3:6]), np.asarray(params[6:9]), params[9], params[10])
             elif obj_type == "set":
-                scene_settings = SceneSettings(params[:3], params[3], params[4])
+                scene_settings = SceneSettings(np.asarray(params[:3]), params[3], params[4])
             elif obj_type == "mtl":
-                material = Material(params[:3], params[3:6], params[6:9], params[9], params[10])
+                material = Material(np.asarray(params[:3]), np.asarray(params[3:6]), np.asarray(params[6:9]), params[9], params[10])
                 objects.append(material)
             elif obj_type == "sph":
                 sphere = Sphere(np.asarray(params[:3]), params[3], int(params[4]))
@@ -151,7 +187,7 @@ def parse_scene_file(file_path):
                 cube = Cube(np.asarray(params[:3]), params[3], int(params[4]))
                 objects.append(cube)
             elif obj_type == "lgt":
-                light = Light(params[:3], params[3:6], params[6], params[7], params[8])
+                light = Light(np.asarray(params[:3]), np.asarray(params[3:6]), params[6], params[7], params[8])
                 objects.append(light)
             else:
                 raise ValueError("Unknown object type: {}".format(obj_type))
@@ -173,6 +209,7 @@ def main():
 
     # Parse the scene file
     camera, scene_settings, objects = parse_scene_file(args.scene_file)
+    np.seterr(divide='ignore', invalid='ignore')
 
     image_array = get_scene(camera, scene_settings, objects, args.width, args.height)
 
