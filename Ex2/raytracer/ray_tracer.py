@@ -63,7 +63,7 @@ def intersections(rays, objects, camera_origin):
             for i in range(3):
                 pos_face = object.position[i] + (object.scale / 2)
                 neg_face = object.position[i] - (object.scale / 2)
-                mask = np.abs(rays[..., i]) > 0
+                mask = np.abs(rays[..., i]) >= 0
                 t1 = np.where(mask, (neg_face - camera_origin[..., i]) / rays[..., i], np.inf)
                 t2 = np.where(mask, (pos_face - camera_origin[..., i]) / rays[..., i], -np.inf)
                 t_min[..., i] = np.minimum(t1, t2)
@@ -90,12 +90,6 @@ def intersections(rays, objects, camera_origin):
 def get_hits(rays, objects, position):
     normalized_rays = normalize_multiple(rays-position) 
     return intersections(normalized_rays, objects, position)
-    # for object in objects:
-    #     distance = intersections(rays, object, position, type(object))
-    #     if distance:
-    #             distances.append([distance, object])
-    # min_array = min(distances, key=lambda x: x[0]) if distances else None
-    # return min_array
 
 def get_color(hit, materials):
     if not hit:
