@@ -107,30 +107,30 @@ def get_hits(rays, objects, position):
     #         return False
     # return True
 
-def get_color(hit, ray, bg, camera_origin, materials, lights, surfaces, camera):
+def get_color(hit, ray, bg, materials, lights, surfaces, camera):
     color = np.zeros((3))
-    V = normalize(ray - camera_origin)
+    V = normalize(ray - camera.position)
     if not hit:
         return bg 
     material = materials[hit[0][1].material_index-1]
-    if type(hit[0][1]) == InfinitePlane:
-        return 255 * material.diffuse_color
-    intersection_point = camera_origin + hit[0][0] * V
-    normal_to_surface = normalize(intersection_point - hit[0][1].position) if type(hit[0][1]) != InfinitePlane else hit[0][1].normal
+    # if type(hit[0][1]) == InfinitePlane:
+    #     return 255 * material.diffuse_color
+    intersection_point = camera.position + hit[0][0] * V
+    normal_to_surface = normalize(intersection_point - hit[0][1].position) if type(hit[0][1]) != InfinitePlane else normalize(intersection_point - hit[0][1].normal * hit[0][1].offset)
     for light in lights:
         direction_to_light = normalize(light.position - intersection_point)
         direction_to_ray_origin = normalize(camera.position - intersection_point)
-        shited_intersection = intersection_point + normal_to_surface * 0.00001
-        min_distance = sorted(intersections(direction_to_light, surfaces, shited_intersection))
+        shifted_intersection = intersection_point + normal_to_surface * 0.0001
+        min_distance = sorted(intersections(direction_to_light, surfaces, shifted_intersection))
         is_shadowed = (hit[0][1] == min_distance[0][1])
-        if (is_shadowed):
+        if (is_shadowed and type(hit[0][1]) != InfinitePlane):
             continue
         else:
             # Kd(N.dot(Li))
             color += material.diffuse_color * np.maximum(normal_to_surface.dot(direction_to_light), 0) * light.color
             # Ks((V.dot(R))^n)
             phong = normal_to_surface.dot(normalize((direction_to_light + direction_to_ray_origin)))
-            color += np.power(np.clip(phong, 0, 1), material.shininess) * material.specular_color
+            color += np.power(np.clip(phong, 0, 1), material.shininess) * material.specular_color * light.specular_intensity
     return 255 * np.clip(color, 0, 1)
 
 def split_objects(objects):
@@ -155,7 +155,7 @@ def get_scene(camera, settings, objects, width, height):
     hits = get_hits(rays, surfaces, camera.position)
     for i in range(height):
         for j in range(width):
-            img[i][j] = get_color(hits[i][j], rays[i][j], settings.background_color, camera.position, materials, lights, surfaces, camera)
+            img[i][j] = get_color(hits[i][j], rays[i][j], settings.background_color, materials, lights, surfaces, camera)
     return img
 
 def parse_scene_file(file_path):
@@ -203,8 +203,8 @@ def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
     parser.add_argument('scene_file', type=str, default=".\scenes\pool.txt", help='Path to the scene file')
     parser.add_argument('output_image', type=str, default="dummy_output.png", help='Name of the output image file')
-    parser.add_argument('--width', type=int, default=500, help='Image width')
-    parser.add_argument('--height', type=int, default=500, help='Image height')
+    parser.add_argument('--width', type=int, default=100, help='Image width')
+    parser.add_argument('--height', type=int, default=100, help='Image height')
     args = parser.parse_args()
 
     # Parse the scene file
