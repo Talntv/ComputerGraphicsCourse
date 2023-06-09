@@ -126,11 +126,21 @@ def get_light_intensity_at_point(intersection_point, hit, light, surfaces, setti
     # Formula from bottom of page 6
     return (1 - light.shadow_intensity) + light.shadow_intensity * (successful_light_rays_hits / (num_of_shadow_rays**2))
 
-def get_color(hit, ray, bg, materials, lights, surfaces, camera, settings, recursion_depth):
+# def get_reflection_color(hit, ray, materials, lights, surfaces, camera, settings, material, recursion_depth):
+#     V = normalize(ray - camera.position)
+#     intersection_point = camera.position + hit[0][0] * V
+#     ray_to_camera_direction = normalize(ray - intersection_point)
+#     ray_reflected_direction = 2 * np.dot(intersection_point, ray_to_camera_direction) * intersection_point - ray_to_camera_direction
+#     hits = intersections(ray_reflected_direction, intersection_point, surfaces)
+#     if not hits:
+#         return settings.background_color * material.reflection_color
+#     return get_color(hit, ray, materials, lights, surfaces, camera, settings, recursion_depth + 1) * material.reflection_color
+
+def get_color(hit, ray, materials, lights, surfaces, camera, settings, recursion_depth):
     color = np.zeros((3))
     V = normalize(ray - camera.position)
     if not hit or recursion_depth > 3:
-        return bg 
+        return settings.background_color
     material = materials[hit[0][1].material_index-1]
     intersection_point = camera.position + hit[0][0] * V
     normal_to_surface = normalize(intersection_point - hit[0][1].position) if type(hit[0][1]) != InfinitePlane else normalize(hit[0][1].normal)
@@ -144,7 +154,11 @@ def get_color(hit, ray, bg, materials, lights, surfaces, camera, settings, recur
         direction_to_ray_origin = normalize(camera.position - intersection_point)
         phong = np.clip(normal_to_surface.dot(normalize((direction_to_light + direction_to_ray_origin))), 0, 1)
         color += np.power(phong, material.shininess) * material.specular_color * light.specular_intensity * light.color * light_intensity
-    return 255 * np.clip(color, 0, 1)
+    bg_color = 0 if material.transparency <= 0 else get_color(hit[1:], ray, materials, lights, surfaces, camera, settings, recursion_depth + 1)
+    # reflection_color = get_reflection_color(hit, ray, materials, lights, surfaces, camera, settings, material, recursion_depth)
+    color = bg_color * material.transparency + color * (1 - material.transparency) + reflection_color
+
+    return np.clip(color, 0, 1)
 
 def split_objects(objects):
     materials = []
@@ -168,7 +182,11 @@ def get_scene(camera, settings, objects, width, height):
     hits = get_hits(rays, surfaces, camera.position)
     for i in range(height):
         for j in range(width):
-            img[i][j] = get_color(hits[i][j], rays[i][j], settings.background_color, materials, lights, surfaces, camera, settings, 1)
+            # if (i % 10 == 0 and j == 25):
+            #     print(i)
+            # if (i == 42 and j == 40):
+            #     print("A")
+            img[i][j] = get_color(hits[i][j], rays[i][j], materials, lights, surfaces, camera, settings, 1)*255
     return img
 
 def parse_scene_file(file_path):
