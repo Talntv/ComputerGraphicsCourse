@@ -45,6 +45,19 @@ def get_normalized_camera_parameters(camera, width):
     ratio = camera.screen_width / width
     return (center_point, v_up, v_right, ratio)
 
+def split_objects(objects):
+    materials = []
+    surfaces = []
+    lights = []
+    for object in objects:
+        if type(object) is Material:
+            materials.append(object)
+        elif type(object) is Light:
+            lights.append(object)
+        else:
+            surfaces.append(object)
+    return (materials, surfaces, lights)
+
 def get_rays(camera, center_point, v_up, v_right, ratio, i_coords, j_coords, width, height):
     '''
     Returns ndarray of shape (height, weight, 3), where each entry in the intersection point of the ray originated in the camera position with the screen, i.e 'P'.
@@ -115,10 +128,8 @@ def intersections(rays, surfaces, camera_origin):
 def get_light_intensity_at_point(hit, light, surfaces, settings):
     num_of_shadow_rays = int(settings.root_number_shadow_rays)
     direction_from_light = normalize(hit.point - light.position)
-    if np.argmax(np.abs(direction_from_light)) != 0:
-        right_vector = normalize(np.cross(direction_from_light, np.asarray([1, 0, 0])))
-    else:
-        right_vector = normalize(np.cross(direction_from_light, np.asarray([0, 1, 0])))
+    light_normal_dimension = 1 if np.argmax(np.abs(direction_from_light)) != 0 else 0
+    right_vector = normalize(np.cross(direction_from_light, np.asarray([light_normal_dimension, 1-light_normal_dimension, 0])))
     up_vector = normalize(np.cross(direction_from_light, right_vector))
     successful_light_rays_hits = 0
     cell_size = light.radius / num_of_shadow_rays
@@ -127,7 +138,7 @@ def get_light_intensity_at_point(hit, light, surfaces, settings):
             p = light.position + (j - num_of_shadow_rays // 2) * cell_size * right_vector - (i - num_of_shadow_rays // 2) * cell_size * up_vector
             right = np.random.uniform(-0.5 * cell_size, 0.5 * cell_size) * right_vector
             up = np.random.uniform(-0.5 * cell_size, 0.5 * cell_size) * up_vector
-            p = p + right + up
+            p += right + up
             ray_to_light_direction = normalize(hit.point - p)
             light_hit = intersections(ray_to_light_direction, surfaces, p)[0]
             # i.e ray hit the surface in the original intersection point
@@ -145,40 +156,28 @@ def get_reflection_color(hit : Hit, ray_origin, materials, lights, surfaces, set
     return get_color(hits, hit.point, materials, lights, surfaces, settings, recursion_depth + 1) * material.reflection_color
 
 def get_color(hits : Hit, ray_origin, materials, lights, surfaces, settings, recursion_depth):
-    hit = hits[0]
-    color = np.zeros((3))
+    if not hits or recursion_depth > settings.max_recursions:
+        return settings.background_color
     diffuse_color = np.zeros(3)
     specular_color = np.zeros(3)
-    if not hit or recursion_depth > settings.max_recursions:
-        return settings.background_color
+    hit = hits[0]
     material = materials[hit.surface.material_index-1]
     for light in lights:
         direction_to_light = normalize(light.position - hit.point)
         # To produce soft shadows
-        light_intensity = get_light_intensity_at_point(hit, light, surfaces, settings)
+        light_intensity = 1 #get_light_intensity_at_point(hit, light, surfaces, settings)
         # Kd(N.dot(Li))
         diffuse_color += material.diffuse_color * np.maximum((hit.normal).dot(direction_to_light), 0) * light.color * light_intensity
         # Ks((V.dot(R))^n)
         direction_to_ray_origin = normalize(ray_origin - hit.normal)
         phong = np.clip(hit.normal.dot(normalize((direction_to_light + direction_to_ray_origin))), 0, 1)
         specular_color += np.power(phong, material.shininess) * material.specular_color * light.specular_intensity * light.color * light_intensity
+    # Handle transparency
     bg_color = 0 if material.transparency <= 0 else get_color(hit[1:], ray_origin, materials, lights, surfaces, settings, recursion_depth + 1)
+    # Handle reclection
     reflection_color = get_reflection_color(hit, ray_origin, materials, lights, surfaces, settings, material, recursion_depth)
-    color = bg_color * material.transparency + (diffuse_color + specular_color) * (1 - material.transparency) + reflection_color
-    return np.clip(color, 0, 1)
-
-def split_objects(objects):
-    materials = []
-    surfaces = []
-    lights = []
-    for object in objects:
-        if type(object) is Material:
-            materials.append(object)
-        elif type(object) is Light:
-            lights.append(object)
-        else:
-            surfaces.append(object)
-    return (materials, surfaces, lights)
+    # Sum all colors
+    return np.clip((bg_color * material.transparency + (diffuse_color + specular_color) * (1 - material.transparency) + reflection_color), 0, 1)
 
 @measure_time
 def get_scene(camera, settings, objects, width, height):
@@ -189,19 +188,17 @@ def get_scene(camera, settings, objects, width, height):
     rays = get_rays(camera, center_point, v_up, v_right, ratio, i_coords, j_coords, width, height)
     hits = intersections(rays, surfaces, camera.position)
 
-    results = Parallel(n_jobs=os.cpu_count())((
-        delayed(get_color)(hits[i][j], camera.position, materials, lights, surfaces, settings, 1) for i in range(width) for j in range(height)))
-    for index, color in enumerate(results):
-        i = index // height
-        j = index % height
-        img[i, j] = color*255
-    # for i in range(height):
-    #     for j in range(width):
-    #         if (i % 10 == 0 and j == 25):
-    #             print(i)
-    #         if (i == 62 and j == 32):
-    #             print("A")
-    #         img[i][j] = get_color(hits[i][j], camera.position, materials, lights, surfaces, settings, 1)*255
+    # results = Parallel(n_jobs=os.cpu_count())((
+    #     delayed(get_color)(hits[i][j], camera.position, materials, lights, surfaces, settings, 1) for i in range(width) for j in range(height)))
+    # for index, color in enumerate(results):
+    #     i = index // height
+    #     j = index % height
+    #     img[i, j] = color*255
+    for i in range(height):
+        for j in range(width):
+            if (j == 0):
+                print(i)
+            img[i][j] = get_color(hits[i][j], camera.position, materials, lights, surfaces, settings, 1)*255
     return img
 
 def parse_scene_file(file_path):
@@ -248,13 +245,12 @@ def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
     parser.add_argument('scene_file', type=str, default=".\scenes\pool.txt", help='Path to the scene file')
     parser.add_argument('output_image', type=str, default="dummy_output.png", help='Name of the output image file')
-    parser.add_argument('--width', type=int, default=50, help='Image width')
-    parser.add_argument('--height', type=int, default=50, help='Image height')
+    parser.add_argument('--width', type=int, default=500, help='Image width')
+    parser.add_argument('--height', type=int, default=500, help='Image height')
     args = parser.parse_args()
 
     # Parse the scene file
     camera, scene_settings, objects = parse_scene_file(args.scene_file)
-    np.seterr(divide='ignore', invalid='ignore')
 
     image_array = get_scene(camera, scene_settings, objects, args.width, args.height)
 
