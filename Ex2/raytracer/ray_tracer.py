@@ -9,18 +9,31 @@ from scene_settings import SceneSettings
 from surfaces.cube import Cube
 from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
+from hit import Hit
 
-def normalize(vector):
-    magnitude = np.linalg.norm(vector)
-    if magnitude == 0:
-        return vector
-    return vector / magnitude
+import os
+from joblib import Parallel, delayed
+import time
+def measure_time(func):
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        execution_time = end_time - start_time
+        print(f"Function {func.__name__} took {execution_time:.3f} seconds")
+        return result
+    return wrapper
 
-def normalize_multiple(vectors):
-    normalized_vectors = np.copy(vectors)
-    for i in range(len(normalized_vectors)):
-        for j in range(len(normalized_vectors[0])):
-            normalized_vectors[i][j] = normalize(vectors[i][j])
+def normalize(vectors):
+    # Normalize single vector
+    if vectors.ndim == 1:
+        magnitude = np.linalg.norm(vectors)
+        if magnitude == 0:
+            return vectors
+        return vectors / magnitude
+    # Normalize array of vectors
+    norms = np.linalg.norm(vectors, axis=2)
+    normalized_vectors = vectors / norms[..., np.newaxis]
     return normalized_vectors
 
 # Should only be called once, when initializing the scene
@@ -32,15 +45,17 @@ def get_normalized_camera_parameters(camera, width):
     ratio = camera.screen_width / width
     return (center_point, v_up, v_right, ratio)
 
-def get_rays(center_point, v_up, v_right, ratio, i_coords, j_coords, width, height):
+def get_rays(camera, center_point, v_up, v_right, ratio, i_coords, j_coords, width, height):
     '''
     Returns ndarray of shape (height, weight, 3), where each entry in the intersection point of the ray originated in the camera position with the screen, i.e 'P'.
     '''
     v_up = v_up.reshape(1, 1, 3) 
     v_right = v_right.reshape(1, 1, 3)
-    return center_point + np.expand_dims((j_coords - width//2), 2) * ratio * v_right - np.expand_dims((i_coords - height//2), 2) * ratio * v_up
+    screen_p =  center_point + np.expand_dims((j_coords - width//2), 2) * ratio * v_right - np.expand_dims((i_coords - height//2), 2) * ratio * v_up
+    return normalize(screen_p - camera.position)
 
 def intersections(rays, surfaces, camera_origin):
+    np.seterr(divide='ignore', invalid='ignore')
     hits = []
     rays_hits = np.empty(rays.shape[:2], dtype=np.ndarray)
     light_hits = []
@@ -84,27 +99,22 @@ def intersections(rays, surfaces, camera_origin):
                 for q in range(len(surfaces)):
                     if hits[q][0][i][j] != np.inf:
                         if rays_hits[i][j] is None:
-                            rays_hits[i][j] = [[hits[q][0][i][j], hits[q][1]]]
+                            rays_hits[i][j] = [Hit(hits[q][0][i][j], hits[q][1], camera_origin + hits[q][0][i][j]*rays[i][j] )]
                         else:
-                            rays_hits[i][j].append([hits[q][0][i][j], hits[q][1]])
-                rays_hits[i][j] = sorted(rays_hits[i][j], key=lambda x: x[0])
+                            rays_hits[i][j].append(Hit(hits[q][0][i][j], hits[q][1], camera_origin + hits[q][0][i][j]*rays[i][j]))
+                rays_hits[i][j] = sorted(rays_hits[i][j], key=lambda x: x.t)
         return rays_hits
     
     elif hits:
         for q in range(len(surfaces)):
-            if hits[q][0] != np.inf:
-                light_hits.append([hits[q][0], hits[q][1]])
-        return light_hits
+            if hits[q][0] != np.inf and hits[q][0] > 0.0000001:
+                light_hits.append(Hit(hits[q][0], hits[q][1], camera_origin + hits[q][0]*rays))
+        return sorted(light_hits, key=lambda x: x.t)
     return None    
 
-def get_hits(rays, surfaces, position):
-    # Sine the rays are actually the intersection points with the screen, we convert them to normalized direction vectors in direction from the origin (camera.position) to the screen pixel
-    normalized_rays = normalize_multiple(rays-position) 
-    return intersections(normalized_rays, surfaces, position)
-
-def get_light_intensity_at_point(intersection_point, hit, light, surfaces, settings):
+def get_light_intensity_at_point(hit, light, surfaces, settings):
     num_of_shadow_rays = int(settings.root_number_shadow_rays)
-    direction_from_light = normalize(intersection_point - light.position)
+    direction_from_light = normalize(hit.point - light.position)
     if np.argmax(np.abs(direction_from_light)) != 0:
         right_vector = normalize(np.cross(direction_from_light, np.asarray([1, 0, 0])))
     else:
@@ -118,46 +128,43 @@ def get_light_intensity_at_point(intersection_point, hit, light, surfaces, setti
             right = np.random.uniform(-0.5 * cell_size, 0.5 * cell_size) * right_vector
             up = np.random.uniform(-0.5 * cell_size, 0.5 * cell_size) * up_vector
             p = p + right + up
-            ray_to_light_direction = normalize(intersection_point - p)
-            light_hit = sorted(intersections(ray_to_light_direction, surfaces, p), key=lambda x: x[0])[0][1]
+            ray_to_light_direction = normalize(hit.point - p)
+            light_hit = intersections(ray_to_light_direction, surfaces, p)[0]
             # i.e ray hit the surface in the original intersection point
-            if light_hit == hit[0][1]:
+            if light_hit.surface == hit.surface:
                 successful_light_rays_hits += 1
     # Formula from bottom of page 6
     return (1 - light.shadow_intensity) + light.shadow_intensity * (successful_light_rays_hits / (num_of_shadow_rays**2))
 
-# def get_reflection_color(hit, ray, materials, lights, surfaces, camera, settings, material, recursion_depth):
-#     V = normalize(ray - camera.position)
-#     intersection_point = camera.position + hit[0][0] * V
-#     ray_to_camera_direction = normalize(ray - intersection_point)
-#     ray_reflected_direction = 2 * np.dot(intersection_point, ray_to_camera_direction) * intersection_point - ray_to_camera_direction
-#     hits = intersections(ray_reflected_direction, intersection_point, surfaces)
-#     if not hits:
-#         return settings.background_color * material.reflection_color
-#     return get_color(hit, ray, materials, lights, surfaces, camera, settings, recursion_depth + 1) * material.reflection_color
+def get_reflection_color(hit : Hit, ray_origin, materials, lights, surfaces, settings, material, recursion_depth):
+    ray_to_camera_direction = normalize(ray_origin - hit.point)
+    ray_reflected_direction = 2 * np.dot(hit.normal, ray_to_camera_direction) * hit.normal - ray_to_camera_direction
+    hits = intersections(ray_reflected_direction, surfaces, hit.point)
+    if not hits:
+        return settings.background_color * material.reflection_color
+    return get_color(hits, hit.point, materials, lights, surfaces, settings, recursion_depth + 1) * material.reflection_color
 
-def get_color(hit, ray, materials, lights, surfaces, camera, settings, recursion_depth):
+def get_color(hits : Hit, ray_origin, materials, lights, surfaces, settings, recursion_depth):
+    hit = hits[0]
     color = np.zeros((3))
-    V = normalize(ray - camera.position)
-    if not hit or recursion_depth > 3:
+    diffuse_color = np.zeros(3)
+    specular_color = np.zeros(3)
+    if not hit or recursion_depth > settings.max_recursions:
         return settings.background_color
-    material = materials[hit[0][1].material_index-1]
-    intersection_point = camera.position + hit[0][0] * V
-    normal_to_surface = normalize(intersection_point - hit[0][1].position) if type(hit[0][1]) != InfinitePlane else normalize(hit[0][1].normal)
+    material = materials[hit.surface.material_index-1]
     for light in lights:
-        direction_to_light = normalize(light.position - intersection_point)
+        direction_to_light = normalize(light.position - hit.point)
         # To produce soft shadows
-        light_intensity = get_light_intensity_at_point(intersection_point, hit, light, surfaces, settings)
+        light_intensity = get_light_intensity_at_point(hit, light, surfaces, settings)
         # Kd(N.dot(Li))
-        color += material.diffuse_color * np.maximum(normal_to_surface.dot(direction_to_light), 0) * light.color * light_intensity
+        diffuse_color += material.diffuse_color * np.maximum((hit.normal).dot(direction_to_light), 0) * light.color * light_intensity
         # Ks((V.dot(R))^n)
-        direction_to_ray_origin = normalize(camera.position - intersection_point)
-        phong = np.clip(normal_to_surface.dot(normalize((direction_to_light + direction_to_ray_origin))), 0, 1)
-        color += np.power(phong, material.shininess) * material.specular_color * light.specular_intensity * light.color * light_intensity
-    bg_color = 0 if material.transparency <= 0 else get_color(hit[1:], ray, materials, lights, surfaces, camera, settings, recursion_depth + 1)
-    # reflection_color = get_reflection_color(hit, ray, materials, lights, surfaces, camera, settings, material, recursion_depth)
-    color = bg_color * material.transparency + color * (1 - material.transparency) + reflection_color
-
+        direction_to_ray_origin = normalize(ray_origin - hit.normal)
+        phong = np.clip(hit.normal.dot(normalize((direction_to_light + direction_to_ray_origin))), 0, 1)
+        specular_color += np.power(phong, material.shininess) * material.specular_color * light.specular_intensity * light.color * light_intensity
+    bg_color = 0 if material.transparency <= 0 else get_color(hit[1:], ray_origin, materials, lights, surfaces, settings, recursion_depth + 1)
+    reflection_color = get_reflection_color(hit, ray_origin, materials, lights, surfaces, settings, material, recursion_depth)
+    color = bg_color * material.transparency + (diffuse_color + specular_color) * (1 - material.transparency) + reflection_color
     return np.clip(color, 0, 1)
 
 def split_objects(objects):
@@ -173,20 +180,28 @@ def split_objects(objects):
             surfaces.append(object)
     return (materials, surfaces, lights)
 
+@measure_time
 def get_scene(camera, settings, objects, width, height):
     img = np.zeros((height, width, 3))
     materials, surfaces, lights = split_objects(objects)
     center_point, v_up, v_right, ratio = get_normalized_camera_parameters(camera, width)
     i_coords, j_coords = np.meshgrid(np.arange(height), np.arange(width), indexing='ij')
-    rays = get_rays(center_point, v_up, v_right, ratio, i_coords, j_coords, width, height)
-    hits = get_hits(rays, surfaces, camera.position)
-    for i in range(height):
-        for j in range(width):
-            # if (i % 10 == 0 and j == 25):
-            #     print(i)
-            # if (i == 42 and j == 40):
-            #     print("A")
-            img[i][j] = get_color(hits[i][j], rays[i][j], materials, lights, surfaces, camera, settings, 1)*255
+    rays = get_rays(camera, center_point, v_up, v_right, ratio, i_coords, j_coords, width, height)
+    hits = intersections(rays, surfaces, camera.position)
+
+    results = Parallel(n_jobs=os.cpu_count())((
+        delayed(get_color)(hits[i][j], camera.position, materials, lights, surfaces, settings, 1) for i in range(width) for j in range(height)))
+    for index, color in enumerate(results):
+        i = index // height
+        j = index % height
+        img[i, j] = color*255
+    # for i in range(height):
+    #     for j in range(width):
+    #         if (i % 10 == 0 and j == 25):
+    #             print(i)
+    #         if (i == 62 and j == 32):
+    #             print("A")
+    #         img[i][j] = get_color(hits[i][j], camera.position, materials, lights, surfaces, settings, 1)*255
     return img
 
 def parse_scene_file(file_path):
@@ -233,8 +248,8 @@ def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
     parser.add_argument('scene_file', type=str, default=".\scenes\pool.txt", help='Path to the scene file')
     parser.add_argument('output_image', type=str, default="dummy_output.png", help='Name of the output image file')
-    parser.add_argument('--width', type=int, default=100, help='Image width')
-    parser.add_argument('--height', type=int, default=100, help='Image height')
+    parser.add_argument('--width', type=int, default=50, help='Image width')
+    parser.add_argument('--height', type=int, default=50, help='Image height')
     args = parser.parse_args()
 
     # Parse the scene file
