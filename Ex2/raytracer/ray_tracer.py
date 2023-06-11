@@ -112,38 +112,58 @@ def intersections(rays, surfaces, camera_origin):
                 for q in range(len(surfaces)):
                     if hits[q][0][i][j] != np.inf:
                         if rays_hits[i][j] is None:
-                            rays_hits[i][j] = [Hit(hits[q][0][i][j], hits[q][1], camera_origin + hits[q][0][i][j]*rays[i][j] )]
+                            rays_hits[i][j] = [Hit(hits[q][0][i][j], hits[q][1], camera_origin + hits[q][0][i][j]*rays[i][j])]
                         else:
                             rays_hits[i][j].append(Hit(hits[q][0][i][j], hits[q][1], camera_origin + hits[q][0][i][j]*rays[i][j]))
                 rays_hits[i][j] = sorted(rays_hits[i][j], key=lambda x: x.t)
         return rays_hits
     
-    elif hits:
-        for q in range(len(surfaces)):
-            if hits[q][0] != np.inf and hits[q][0] > 0.0000001:
-                light_hits.append(Hit(hits[q][0], hits[q][1], camera_origin + hits[q][0]*rays))
-        return sorted(light_hits, key=lambda x: x.t)
+    # elif hits:
+    #     for q in range(len(surfaces)):
+    #         if hits[q][0] != np.inf and hits[q][0] > 0.0000001:
+    #             light_hits.append(Hit(hits[q][0], hits[q][1], camera_origin + hits[q][0]*rays))
+    #     return sorted(light_hits, key=lambda x: x.t)
     return None    
 
 def get_light_intensity_at_point(hit, light, surfaces, settings):
     num_of_shadow_rays = int(settings.root_number_shadow_rays)
     direction_from_light = normalize(hit.point - light.position)
     light_normal_dimension = 1 if np.argmax(np.abs(direction_from_light)) != 0 else 0
-    right_vector = normalize(np.cross(direction_from_light, np.asarray([light_normal_dimension, 1-light_normal_dimension, 0])))
-    up_vector = normalize(np.cross(direction_from_light, right_vector))
+    right_vector = normalize(np.cross(direction_from_light, np.asarray([light_normal_dimension, 1-light_normal_dimension, 0]))).reshape(1, 1, 3) 
+    up_vector = normalize(np.cross(direction_from_light, right_vector)).reshape(1, 1, 3) 
     successful_light_rays_hits = 0
     cell_size = light.radius / num_of_shadow_rays
-    for i in range(num_of_shadow_rays):
-        for j in range(num_of_shadow_rays):
-            p = light.position + (j - num_of_shadow_rays // 2) * cell_size * right_vector - (i - num_of_shadow_rays // 2) * cell_size * up_vector
-            right = np.random.uniform(-0.5 * cell_size, 0.5 * cell_size) * right_vector
-            up = np.random.uniform(-0.5 * cell_size, 0.5 * cell_size) * up_vector
-            p += right + up
-            ray_to_light_direction = normalize(hit.point - p)
-            light_hit = intersections(ray_to_light_direction, surfaces, p)[0]
-            # i.e ray hit the surface in the original intersection point
-            if light_hit.surface == hit.surface:
-                successful_light_rays_hits += 1
+    indices = np.arange(num_of_shadow_rays) - num_of_shadow_rays // 2
+    j_indices, i_indices = np.meshgrid(indices, indices)
+
+    # Calculate positions
+    p = light.position + np.expand_dims(j_indices,2) * cell_size * right_vector - np.expand_dims(i_indices,2) * cell_size * up_vector
+
+    # Generate random vectors
+    right = np.expand_dims(np.random.uniform(-0.5 * cell_size, 0.5 * cell_size, size=(num_of_shadow_rays, num_of_shadow_rays)),2) * right_vector
+    up = np.expand_dims(np.random.uniform(-0.5 * cell_size, 0.5 * cell_size, size=(num_of_shadow_rays, num_of_shadow_rays)),2) * up_vector
+
+    # Update positions
+    p += right + up
+
+    # Calculate ray directions
+    ray_to_light_direction = normalize(hit.point - p)
+
+    # Perform intersection calculations
+    light_hits = intersections(ray_to_light_direction, surfaces, p)
+    matching_surfaces = np.array([obj[0].surface for obj in light_hits.ravel()]) == hit.surface
+    successful_light_rays_hits = np.count_nonzero(matching_surfaces)
+    # for i in range(num_of_shadow_rays):
+    #     for j in range(num_of_shadow_rays):
+    #         p = light.position + (j - num_of_shadow_rays // 2) * cell_size * right_vector - (i - num_of_shadow_rays // 2) * cell_size * up_vector
+    #         right = np.random.uniform(-0.5 * cell_size, 0.5 * cell_size) * right_vector
+    #         up = np.random.uniform(-0.5 * cell_size, 0.5 * cell_size) * up_vector
+    #         p += right + up
+    #         ray_to_light_direction = normalize(hit.point - p)
+    #         light_hit = intersections(ray_to_light_direction, surfaces, p)[0]
+    #         # i.e ray hit the surface in the original intersection point
+    #         if light_hit.surface == hit.surface:
+    #             successful_light_rays_hits += 1
     # Formula from bottom of page 6
     return (1 - light.shadow_intensity) + light.shadow_intensity * (successful_light_rays_hits / (num_of_shadow_rays**2))
 
@@ -165,7 +185,7 @@ def get_color(hits : Hit, ray_origin, materials, lights, surfaces, settings, rec
     for light in lights:
         direction_to_light = normalize(light.position - hit.point)
         # To produce soft shadows
-        light_intensity = 1 #get_light_intensity_at_point(hit, light, surfaces, settings)
+        light_intensity = get_light_intensity_at_point(hit, light, surfaces, settings)
         # Kd(N.dot(Li))
         diffuse_color += material.diffuse_color * np.maximum((hit.normal).dot(direction_to_light), 0) * light.color * light_intensity
         # Ks((V.dot(R))^n)
@@ -188,17 +208,17 @@ def get_scene(camera, settings, objects, width, height):
     rays = get_rays(camera, center_point, v_up, v_right, ratio, i_coords, j_coords, width, height)
     hits = intersections(rays, surfaces, camera.position)
 
-    # results = Parallel(n_jobs=os.cpu_count())((
-    #     delayed(get_color)(hits[i][j], camera.position, materials, lights, surfaces, settings, 1) for i in range(width) for j in range(height)))
-    # for index, color in enumerate(results):
-    #     i = index // height
-    #     j = index % height
-    #     img[i, j] = color*255
-    for i in range(height):
-        for j in range(width):
-            if (j == 0):
-                print(i)
-            img[i][j] = get_color(hits[i][j], camera.position, materials, lights, surfaces, settings, 1)*255
+    results = Parallel(n_jobs=os.cpu_count())((
+        delayed(get_color)(hits[i][j], camera.position, materials, lights, surfaces, settings, 1) for i in range(width) for j in range(height)))
+    for index, color in enumerate(results):
+        i = index // height
+        j = index % height
+        img[i, j] = color*255
+    # for i in range(height):
+    #     for j in range(width):
+    #         if (j == 0):
+    #             print(i)
+    #         img[i][j] = get_color(hits[i][j], camera.position, materials, lights, surfaces, settings, 1)*255
     return img
 
 def parse_scene_file(file_path):
@@ -245,8 +265,8 @@ def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
     parser.add_argument('scene_file', type=str, default=".\scenes\pool.txt", help='Path to the scene file')
     parser.add_argument('output_image', type=str, default="dummy_output.png", help='Name of the output image file')
-    parser.add_argument('--width', type=int, default=500, help='Image width')
-    parser.add_argument('--height', type=int, default=500, help='Image height')
+    parser.add_argument('--width', type=int, default=100, help='Image width')
+    parser.add_argument('--height', type=int, default=100, help='Image height')
     args = parser.parse_args()
 
     # Parse the scene file
