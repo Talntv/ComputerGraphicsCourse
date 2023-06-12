@@ -109,20 +109,22 @@ def intersections(rays, surfaces, camera_origin):
     if hits and rays.ndim > 1:
         for i in range(rays.shape[0]):
             for j in range(rays.shape[1]):
+                current_ray = rays[i][j]
                 for q in range(len(surfaces)):
-                    if hits[q][0][i][j] != np.inf:
+                    t = hits[q][0][i][j]
+                    if (t != np.inf and t > 0.000001):
                         if rays_hits[i][j] is None:
-                            rays_hits[i][j] = [Hit(hits[q][0][i][j], hits[q][1], camera_origin + hits[q][0][i][j]*rays[i][j])]
+                            rays_hits[i][j] = [Hit(t, hits[q][1], camera_origin + t*current_ray)]
                         else:
-                            rays_hits[i][j].append(Hit(hits[q][0][i][j], hits[q][1], camera_origin + hits[q][0][i][j]*rays[i][j]))
+                            rays_hits[i][j].append(Hit(t, hits[q][1], camera_origin + t*current_ray))
                 rays_hits[i][j] = sorted(rays_hits[i][j], key=lambda x: x.t)
         return rays_hits
     
-    # elif hits:
-    #     for q in range(len(surfaces)):
-    #         if hits[q][0] != np.inf and hits[q][0] > 0.0000001:
-    #             light_hits.append(Hit(hits[q][0], hits[q][1], camera_origin + hits[q][0]*rays))
-    #     return sorted(light_hits, key=lambda x: x.t)
+    elif hits:
+        for q in range(len(surfaces)):
+            if hits[q][0] != np.inf and hits[q][0] > 0.0000001:
+                light_hits.append(Hit(hits[q][0], hits[q][1], camera_origin + hits[q][0]*rays))
+        return sorted(light_hits, key=lambda x: x.t)
     return None    
 
 def get_light_intensity_at_point(hit, light, surfaces, settings):
@@ -135,35 +137,31 @@ def get_light_intensity_at_point(hit, light, surfaces, settings):
     cell_size = light.radius / num_of_shadow_rays
     indices = np.arange(num_of_shadow_rays) - num_of_shadow_rays // 2
     j_indices, i_indices = np.meshgrid(indices, indices)
-
-    # Calculate positions
     p = light.position + np.expand_dims(j_indices,2) * cell_size * right_vector - np.expand_dims(i_indices,2) * cell_size * up_vector
-
     # Generate random vectors
     right = np.expand_dims(np.random.uniform(-0.5 * cell_size, 0.5 * cell_size, size=(num_of_shadow_rays, num_of_shadow_rays)),2) * right_vector
     up = np.expand_dims(np.random.uniform(-0.5 * cell_size, 0.5 * cell_size, size=(num_of_shadow_rays, num_of_shadow_rays)),2) * up_vector
-
-    # Update positions
     p += right + up
-
-    # Calculate ray directions
     ray_to_light_direction = normalize(hit.point - p)
-
-    # Perform intersection calculations
     light_hits = intersections(ray_to_light_direction, surfaces, p)
     matching_surfaces = np.array([obj[0].surface for obj in light_hits.ravel()]) == hit.surface
     successful_light_rays_hits = np.count_nonzero(matching_surfaces)
+
+    # The following commented lines are alternative for the upper 2 lines, in case we want to consider light going through partially\fully
+    # transperant objects. If light goes through object with transperancy factor of x (1>= x >=0) then we consider the ray intensity that hit the intersection point as 1 * middle_object_1.transperancy * middle_object_2.transperancy...
+    # Hitting a non transperant object we get 0, full transperant object is as if it wasn't even there, light just goes through
+    # successful_light_rays_hits = 0
     # for i in range(num_of_shadow_rays):
     #     for j in range(num_of_shadow_rays):
-    #         p = light.position + (j - num_of_shadow_rays // 2) * cell_size * right_vector - (i - num_of_shadow_rays // 2) * cell_size * up_vector
-    #         right = np.random.uniform(-0.5 * cell_size, 0.5 * cell_size) * right_vector
-    #         up = np.random.uniform(-0.5 * cell_size, 0.5 * cell_size) * up_vector
-    #         p += right + up
-    #         ray_to_light_direction = normalize(hit.point - p)
-    #         light_hit = intersections(ray_to_light_direction, surfaces, p)[0]
-    #         # i.e ray hit the surface in the original intersection point
-    #         if light_hit.surface == hit.surface:
-    #             successful_light_rays_hits += 1
+    #             q = 0
+    #             accumulated_ray_weight = 1
+    #             next_light_ray_hit = light_hits.ravel()[q]
+    #             while ((next_light_ray_hit.surface != hit.surface) and (q < len(light_hits.ravel)
+    #                 accumulated_ray *= materials[next_light_ray_hit.surface.material_index-1].transparency
+    #                 q += 1
+    #                 next_light_ray_hit = light_hits.ravel()[q]
+    #             successful_light_rays_hits += accumulated_ray_weight
+
     # Formula from bottom of page 6
     return (1 - light.shadow_intensity) + light.shadow_intensity * (successful_light_rays_hits / (num_of_shadow_rays**2))
 
@@ -192,12 +190,18 @@ def get_color(hits : Hit, ray_origin, materials, lights, surfaces, settings, rec
         direction_to_ray_origin = normalize(ray_origin - hit.normal)
         phong = np.clip(hit.normal.dot(normalize((direction_to_light + direction_to_ray_origin))), 0, 1)
         specular_color += np.power(phong, material.shininess) * material.specular_color * light.specular_intensity * light.color * light_intensity
-    # Handle transparency
-    bg_color = 0 if material.transparency <= 0 else get_color(hit[1:], ray_origin, materials, lights, surfaces, settings, recursion_depth + 1)
+    # Handle transparency, we don't use recursion but instead reduce list of ray hits by 1
+    bg_color = 0 if material.transparency <= 0 else get_color(hits[1:], ray_origin, materials, lights, surfaces, settings, recursion_depth)
     # Handle reclection
     reflection_color = get_reflection_color(hit, ray_origin, materials, lights, surfaces, settings, material, recursion_depth)
     # Sum all colors
     return np.clip((bg_color * material.transparency + (diffuse_color + specular_color) * (1 - material.transparency) + reflection_color), 0, 1)
+
+def wrap(i,j, hits , ray_origin, materials, lights, surfaces, settings, recursion_depth):
+    color = get_color(hits , ray_origin, materials, lights, surfaces, settings, recursion_depth)
+    if (j==0):
+        print(i)
+    return color
 
 @measure_time
 def get_scene(camera, settings, objects, width, height):
@@ -209,16 +213,11 @@ def get_scene(camera, settings, objects, width, height):
     hits = intersections(rays, surfaces, camera.position)
 
     results = Parallel(n_jobs=os.cpu_count())((
-        delayed(get_color)(hits[i][j], camera.position, materials, lights, surfaces, settings, 1) for i in range(width) for j in range(height)))
+        delayed(wrap)(i, j, hits[i][j], camera.position, materials, lights, surfaces, settings, 1) for i in range(width) for j in range(height)))
     for index, color in enumerate(results):
         i = index // height
         j = index % height
         img[i, j] = color*255
-    # for i in range(height):
-    #     for j in range(width):
-    #         if (j == 0):
-    #             print(i)
-    #         img[i][j] = get_color(hits[i][j], camera.position, materials, lights, surfaces, settings, 1)*255
     return img
 
 def parse_scene_file(file_path):
@@ -265,8 +264,8 @@ def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
     parser.add_argument('scene_file', type=str, default=".\scenes\pool.txt", help='Path to the scene file')
     parser.add_argument('output_image', type=str, default="dummy_output.png", help='Name of the output image file')
-    parser.add_argument('--width', type=int, default=100, help='Image width')
-    parser.add_argument('--height', type=int, default=100, help='Image height')
+    parser.add_argument('--width', type=int, default=200, help='Image width')
+    parser.add_argument('--height', type=int, default=200, help='Image height')
     args = parser.parse_args()
 
     # Parse the scene file
