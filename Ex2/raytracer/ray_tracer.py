@@ -1,6 +1,7 @@
 import argparse
 from PIL import Image
 import numpy as np
+import os
 
 from camera import Camera
 from light import Light
@@ -9,20 +10,17 @@ from scene_settings import SceneSettings
 from surfaces.cube import Cube
 from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
-from hit import Hit
 
-import os
+# Comment the import and the thread jobs is library is unrecognized
 from joblib import Parallel, delayed
 import time
-def measure_time(func):
-    def wrapper(*args, **kwargs):
-        start_time = time.time()
-        result = func(*args, **kwargs)
-        end_time = time.time()
-        execution_time = end_time - start_time
-        print(f"Function {func.__name__} took {execution_time:.3f} seconds")
-        return result
-    return wrapper
+
+class Hit:
+    def __init__(self, t, surface, point):
+        self.t = t
+        self.surface = surface
+        self.point = point
+        self.normal = normalize(self.point - surface.position) if type(surface) != InfinitePlane else normalize(surface.normal)
 
 def normalize(vectors):
     # Normalize single vector
@@ -198,13 +196,10 @@ def get_color(hits : Hit, ray_origin, materials, lights, surfaces, settings, rec
     # Sum all colors
     return np.clip((bg_color * material.transparency + (diffuse_color + specular_color) * (1 - material.transparency) + reflection_color), 0, 1)
 
-def wrap(i,j, hits , ray_origin, materials, lights, surfaces, settings, recursion_depth):
+def wrap(hits , ray_origin, materials, lights, surfaces, settings, recursion_depth):
     color = get_color(hits , ray_origin, materials, lights, surfaces, settings, recursion_depth)
-    if (j==0):
-        print(i)
     return color
 
-@measure_time
 def get_scene(camera, settings, objects, width, height):
     img = np.zeros((height, width, 3))
     materials, surfaces, lights = split_objects(objects)
@@ -213,12 +208,18 @@ def get_scene(camera, settings, objects, width, height):
     rays = get_rays(camera, center_point, v_up, v_right, ratio, i_coords, j_coords, width, height)
     hits = intersections(rays, surfaces, camera.position)
 
+    # In case Joblib isn't supported, comment the next lines and uncomment the 3 commented lines below to use a loop instead of threads
     results = Parallel(n_jobs=os.cpu_count())((
-        delayed(wrap)(i, j, hits[i][j], camera.position, materials, lights, surfaces, settings, 1) for i in range(width) for j in range(height)))
+        delayed(wrap)(hits[i][j], camera.position, materials, lights, surfaces, settings, 1) for i in range(width) for j in range(height)))
     for index, color in enumerate(results):
         i = index // height
         j = index % height
         img[i, j] = color*255
+
+    # for i in range(height):
+    #     for j in range(width):
+    #         img[i][j] = get_color(hits[i][j], camera.position, materials, lights, surfaces, settings, 1)*255
+
     return img
 
 def parse_scene_file(file_path):
@@ -265,8 +266,8 @@ def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
     parser.add_argument('scene_file', type=str, default=".\scenes\pool.txt", help='Path to the scene file')
     parser.add_argument('output_image', type=str, default="dummy_output.png", help='Name of the output image file')
-    parser.add_argument('--width', type=int, default=500, help='Image width')
-    parser.add_argument('--height', type=int, default=500, help='Image height')
+    parser.add_argument('--width', type=int, default=100, help='Image width')
+    parser.add_argument('--height', type=int, default=100, help='Image height')
     args = parser.parse_args()
 
     # Parse the scene file
