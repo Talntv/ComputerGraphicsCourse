@@ -117,7 +117,8 @@ def intersections(rays, surfaces, camera_origin):
                             rays_hits[i][j] = [Hit(t, hits[q][1], camera_origin + t*current_ray)]
                         else:
                             rays_hits[i][j].append(Hit(t, hits[q][1], camera_origin + t*current_ray))
-                rays_hits[i][j] = sorted(rays_hits[i][j], key=lambda x: x.t)
+                if rays_hits[i][j] is not None:
+                    rays_hits[i][j] = sorted(rays_hits[i][j], key=lambda x: x.t)
         return rays_hits
     
     elif hits:
@@ -144,7 +145,7 @@ def get_light_intensity_at_point(hit, light, surfaces, settings):
     p += right + up
     ray_to_light_direction = normalize(hit.point - p)
     light_hits = intersections(ray_to_light_direction, surfaces, p)
-    matching_surfaces = np.array([obj[0].surface for obj in light_hits.ravel()]) == hit.surface
+    matching_surfaces = np.array([(None if obj == None else obj[0].surface) for obj in light_hits.ravel()]) == hit.surface
     successful_light_rays_hits = np.count_nonzero(matching_surfaces)
 
     # The following commented lines are alternative for the upper 2 lines, in case we want to consider light going through partially\fully
@@ -264,8 +265,8 @@ def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
     parser.add_argument('scene_file', type=str, default=".\scenes\pool.txt", help='Path to the scene file')
     parser.add_argument('output_image', type=str, default="dummy_output.png", help='Name of the output image file')
-    parser.add_argument('--width', type=int, default=200, help='Image width')
-    parser.add_argument('--height', type=int, default=200, help='Image height')
+    parser.add_argument('--width', type=int, default=500, help='Image width')
+    parser.add_argument('--height', type=int, default=500, help='Image height')
     args = parser.parse_args()
 
     # Parse the scene file
