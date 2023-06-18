@@ -264,10 +264,10 @@ def save_image(image_array, new_image_path):
 
 def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
-    parser.add_argument('scene_file', type=str, default=".\scenes\pool.txt", help='Path to the scene file')
-    parser.add_argument('output_image', type=str, default="dummy_output.png", help='Name of the output image file')
-    parser.add_argument('--width', type=int, default=100, help='Image width')
-    parser.add_argument('--height', type=int, default=100, help='Image height')
+    parser.add_argument('scene_file', type=str, help='Path to the scene file')
+    parser.add_argument('output_image', type=str, help='Name of the output image file')
+    parser.add_argument('--width', type=int, default=500, help='Image width')
+    parser.add_argument('--height', type=int, default=500, help='Image height')
     args = parser.parse_args()
 
     # Parse the scene file
